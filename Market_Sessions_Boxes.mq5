@@ -55,6 +55,7 @@ struct SessionBox
    double   low;
    color    final_color;
    bool     evaluated;
+   bool     range_loaded;
 };
 
 SessionInfo g_sessions[3];
@@ -216,7 +217,7 @@ void ConfirmBreak(SessionBox &box, const datetime now)
 {
    int period = PeriodSeconds(PERIOD_M15);
    
-   // Only evaluate once confirmed breakout is final
+   // Only evaluate once
    if(box.evaluated)
       return;
    
@@ -309,6 +310,9 @@ void UpdateSessions()
          box.low = 0;
          box.final_color = clrGray;
          box.evaluated = false;
+         box.range_loaded = false;
+         
+         // Check if box exists in previous state and restore it
          for(int i = 0; i < previous_count; i++)
          {
             if(previous_boxes[i].session == s && previous_boxes[i].open_time == start)
@@ -317,12 +321,30 @@ void UpdateSessions()
                break;
             }
          }
-         if(!box.evaluated && !SessionRange(start, end, now, box.high, box.low))
+         
+         // Only attempt to load M1 range if it hasn't been loaded yet
+         if(!box.range_loaded)
          {
-            ObjectDelete(g_chart, g_prefix + "Box_" + key);
-            ObjectDelete(g_chart, g_prefix + "Label_" + key);
-            continue;
+            if(!SessionRange(start, end, now, box.high, box.low))
+            {
+               // If session is in the past and we still can't load M1 data, mark as attempted
+               // but keep the box if it's already been evaluated or is recent
+               if(end < now - 86400)
+               {
+                  // Very old session, if no data loaded, delete it
+                  ObjectDelete(g_chart, g_prefix + "Box_" + key);
+                  ObjectDelete(g_chart, g_prefix + "Label_" + key);
+                  continue;
+               }
+               // Recent session, keep it for next update
+               g_boxes[g_box_count] = box;
+               g_box_count++;
+               continue;
+            }
+            box.range_loaded = true;
          }
+         
+         // Try to confirm breakout for this session
          ConfirmBreak(box, now);
          g_boxes[g_box_count] = box;
          g_box_count++;
