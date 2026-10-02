@@ -10,7 +10,6 @@
 #property indicator_plots 0
 
 #include <Canvas/Canvas.mqh>
-#include "EconomicCalendar.mqh"
 
 input group "Asian Session (server time)"
 input int   InpAsianOpenHour  = 0;
@@ -38,13 +37,6 @@ input bool InpShowLabels     = true; // Show session names
 input bool InpShowTimeLabels = true; // Append opening time to session labels
 input int  InpBoxWidth       = 1;    // Border width: 1-5 pixels
 input int  InpDaysToShow     = 5;    // Calendar days including today: 1-30
-
-input group "Economic Calendar (MT5 native)"
-input bool InpShowEconomicEvents = true;
-input bool InpEconomicAlerts = true; // Print upcoming/released events to the journal
-input bool InpAutoBrokerUTCOffset = true;
-input int  InpBrokerUTCOffsetMinutes = 120; // Used when automatic offset is disabled
-input int  InpPostEventMinutes = 30; // Volatility window: 15-30 minutes
 
 struct SessionInfo
 {
@@ -81,11 +73,6 @@ datetime    g_last_bar = 0;
 int         g_rsi_h1 = INVALID_HANDLE;
 int         g_rsi_m15 = INVALID_HANDLE;
 int         g_rsi_m5 = INVALID_HANDLE;
-EventInfo   g_events[];
-datetime    g_calendar_success = 0;
-bool        g_calendar_available = false;
-int         g_event_page = 0;
-int         g_event_pages = 1;
 
 #define RSI_PERIOD 14
 
@@ -116,12 +103,6 @@ bool ConfigureSession(const int index, const string name,
 
 int OnInit()
 {
-   if(InpPostEventMinutes < 15 || InpPostEventMinutes > 30 ||
-      InpBrokerUTCOffsetMinutes < -840 || InpBrokerUTCOffsetMinutes > 840)
-   {
-      Print("Calendar post-event window must be 15-30 minutes; UTC offset -840 to 840.");
-      return INIT_PARAMETERS_INCORRECT;
-   }
    if(InpDaysToShow < 1 || InpDaysToShow > 30 || InpBoxWidth < 1 || InpBoxWidth > 5)
    {
       Print("Days to show must be 1-30 and border width must be 1-5.");
@@ -169,7 +150,6 @@ int OnInit()
       Print("Unable to initialize session updates. Error: ", GetLastError());
       return INIT_FAILED;
    }
-   UpdateEconomicEvents();
    UpdateSessions();
    return INIT_SUCCEEDED;
 }
@@ -221,7 +201,6 @@ int OnCalculate(const int rates_total, const int prev_calculated,
 void OnTimer()
 {
    // Also retries asynchronous M1/M15 history requests without waiting for a tick.
-   UpdateEconomicEvents();
    UpdateSessions();
 }
 
@@ -229,246 +208,7 @@ void OnChartEvent(const int id, const long &lparam,
                   const double &dparam, const string &sparam)
 {
    if(id == CHARTEVENT_CHART_CHANGE)
-   {
-      DrawEconomicEvents();
       RenderFills();
-   }
-   if(id == CHARTEVENT_OBJECT_CLICK &&
-      (sparam == g_prefix + "Event_Next" || sparam == g_prefix + "Event_Prev"))
-   {
-      g_event_page = (g_event_page + (sparam == g_prefix + "Event_Next" ? 1 : -1)
-                      + g_event_pages) % g_event_pages;
-      ObjectSetInteger(g_chart, sparam, OBJPROP_STATE, false);
-      DrawEconomicEvents();
-      ChartRedraw(g_chart);
-   }
-}
-
-// Calendar times are UTC, independent of chart bars and the broker's last tick.
-int CalendarBrokerOffset()
-{
-   if(!InpAutoBrokerUTCOffset)
-      return InpBrokerUTCOffsetMinutes * 60;
-   return (int)(MathRound((double)(TimeTradeServer() - TimeGMT()) / 60.0) * 60);
-}
-
-string CalendarEventValue(const string value, const string unit)
-{
-   if(CalendarMissing(value))
-      return "--";
-   if((unit == "percent" || unit == "%") && StringFind(value, "%") < 0)
-      return value + "%";
-   if((unit == "K" || unit == "M" || unit == "B" || unit == "T") &&
-      StringFind(value, unit) < 0)
-      return value + unit;
-   return value;
-}
-
-string CalendarSurprise(const EventInfo &event)
-{
-   double actual, forecast;
-   if(!CalendarNumber(event.actual, actual) || !CalendarNumber(event.forecast, forecast))
-      return "--";
-   double delta = actual - forecast;
-   string result = (delta > 0 ? "+" : "") + DoubleToString(delta, 2);
-   if(event.unit == "percent" || event.unit == "%" || StringFind(event.actual, "%") >= 0)
-      result += " pp";
-   else if((event.unit == "K" || event.unit == "M" || event.unit == "B" || event.unit == "T") &&
-           StringFind(event.actual, event.unit) < 0 && StringFind(event.forecast, event.unit) < 0)
-      result += event.unit;
-   if(forecast != 0)
-   {
-      double relative = delta / MathAbs(forecast) * 100.0;
-      result += " (" + (relative > 0 ? "+" : "") + DoubleToString(relative, 2) + "%)";
-   }
-   return result;
-}
-
-void UpdateEconomicEvents()
-{
-   if(!InpShowEconomicEvents)
-      return;
-   EventInfo incoming[];
-   datetime success;
-   bool available;
-   if(ReadNativeCalendar(incoming, success, available))
-   {
-      for(int i = 0; i < ArraySize(incoming); i++)
-         for(int j = 0; j < ArraySize(g_events); j++)
-            if(incoming[i].name == g_events[j].name &&
-               incoming[i].release_time == g_events[j].release_time)
-            {
-               incoming[i].hour_alerted = g_events[j].hour_alerted;
-               incoming[i].release_alerted = g_events[j].release_alerted;
-               break;
-            }
-      if(CalendarCopy(g_events, incoming))
-      {
-         g_calendar_success = success;
-         g_calendar_available = available;
-      }
-      else
-         g_calendar_available = false;
-   }
-   else
-      g_calendar_available = false;
-   datetime now = TimeGMT();
-   int retained = 0;
-   for(int i = 0; i < ArraySize(g_events); i++)
-   {
-      if(g_events[i].release_time < now - 86400)
-         continue;
-      g_events[i].gold_impact_direction = CalendarGoldDirection(g_events[i]);
-      long remaining = g_events[i].release_time - now;
-      if(InpEconomicAlerts && remaining > 0 && remaining <= 3600 &&
-         !g_events[i].hour_alerted)
-      {
-         Print("Economic calendar: ", g_events[i].name, " in ",
-               (remaining + 59) / 60, " min; forecast ",
-               CalendarEventValue(g_events[i].forecast, g_events[i].unit));
-         g_events[i].hour_alerted = true;
-      }
-      if(InpEconomicAlerts && remaining <= 0 && g_events[i].actual != "" &&
-         !g_events[i].release_alerted)
-      {
-         Print("Economic calendar released: ", g_events[i].name, "; actual ",
-               CalendarEventValue(g_events[i].actual, g_events[i].unit),
-               "; surprise ", CalendarSurprise(g_events[i]));
-         g_events[i].release_alerted = true;
-      }
-      g_events[retained++] = g_events[i];
-   }
-   ArrayResize(g_events, retained);
-   DrawEconomicEvents();
-}
-
-void CalendarLabel(const string name, const string text, const int y, const color ink)
-{
-   if(ObjectFind(g_chart, name) < 0)
-   {
-      if(!ObjectCreate(g_chart, name, OBJ_LABEL, 0, 0, 0))
-         return;
-      ObjectSetInteger(g_chart, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(g_chart, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-      ObjectSetInteger(g_chart, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(g_chart, name, OBJPROP_FONTSIZE, 9);
-      ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
-   }
-   ObjectSetInteger(g_chart, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(g_chart, name, OBJPROP_COLOR, ink);
-   ObjectSetString(g_chart, name, OBJPROP_TEXT, text);
-}
-
-void DrawEconomicEvents()
-{
-   if(!InpShowEconomicEvents)
-      return;
-   datetime now = TimeGMT();
-   int height = (int)ChartGetInteger(g_chart, CHART_HEIGHT_IN_PIXELS, 0);
-   int rows = MathMax(1, (height - 110) / 40);
-   int count = ArraySize(g_events);
-   g_event_pages = MathMax(1, (count + rows - 1) / rows);
-   g_event_page = MathMin(g_event_page, g_event_pages - 1);
-   string status = "Economic calendar";
-   if(!g_calendar_available || g_calendar_success == 0 || now - g_calendar_success > 7200)
-      status += " | MT5 calendar unavailable/stale" + (count > 0 ? " (last known data)" : " - check MT5 Calendar tab");
-   else if(count == 0)
-      status += " | No tracked USD events in next 14 days";
-   if(g_calendar_success > 0)
-      status += " | Updated " + TimeToString(g_calendar_success, TIME_DATE | TIME_MINUTES) + " UTC";
-   status += " | Page " + IntegerToString(g_event_page + 1) + "/" + IntegerToString(g_event_pages);
-   CalendarLabel(g_prefix + "Event_Status", status, 45,
-                 (color)ChartGetInteger(g_chart, CHART_COLOR_FOREGROUND));
-   // Only remove unused row objects; keep active labels in place to avoid flicker.
-   int used = MathMin(rows, count - g_event_page * rows);
-   for(int i = ObjectsTotal(g_chart) - 1; i >= 0; i--)
-   {
-      string name = ObjectName(g_chart, i);
-      if(StringFind(name, g_prefix + "Event_Row_") == 0 &&
-         (int)StringToInteger(StringSubstr(name, StringLen(g_prefix + "Event_Row_"))) >= used)
-         ObjectDelete(g_chart, name);
-   }
-   for(int row = 0; row < used; row++)
-   {
-      EventInfo event = g_events[g_event_page * rows + row];
-      color ink = (event.impact_level == 3 ? clrRed : event.impact_level == 2 ? clrGoldenrod : clrGreen);
-      string impact = (event.impact_level == 3 ? "🔴 HIGH" : event.impact_level == 2 ? "🟡 MED" : "🟢 LOW");
-      string text = event.name + " | Forecast: " + CalendarEventValue(event.forecast, event.unit);
-      if(event.release_time <= now && event.actual != "")
-         text += " | Actual: " + CalendarEventValue(event.actual, event.unit) +
-                 " | Surprise: " + CalendarSurprise(event);
-      else
-         text += " | Time: " + (event.release_time > now ?
-                 IntegerToString((event.release_time - now + 59) / 60) + " min" : "Released, awaiting actual");
-      text += " | Impact: " + impact;
-      string key = g_prefix + "Event_Row_" + IntegerToString(row);
-      CalendarLabel(key, text, 70 + row * 40, ink);
-      int bias = event.gold_impact_direction;
-      CalendarLabel(key + "_Bias",
-                    TimeToString(event.release_time, TIME_DATE | TIME_MINUTES) + " UTC | Gold: " +
-                    (bias < 0 ? "↓ Bearish" : bias > 0 ? "↑ Bullish" : "→ Neutral"),
-                    88 + row * 40, bias < 0 ? clrRed : bias > 0 ? clrGreen :
-                    (color)ChartGetInteger(g_chart, CHART_COLOR_FOREGROUND));
-   }
-   for(int i = 0; i < 2; i++)
-   {
-      string name = g_prefix + (i == 0 ? "Event_Prev" : "Event_Next");
-      if(g_event_pages == 1)
-      {
-         ObjectDelete(g_chart, name);
-         continue;
-      }
-      if(ObjectFind(g_chart, name) < 0)
-         ObjectCreate(g_chart, name, OBJ_BUTTON, 0, 0, 0);
-      ObjectSetInteger(g_chart, name, OBJPROP_XDISTANCE, 10 + i * 80);
-      ObjectSetInteger(g_chart, name, OBJPROP_YDISTANCE, 70 + used * 40);
-      ObjectSetInteger(g_chart, name, OBJPROP_XSIZE, 75);
-      ObjectSetInteger(g_chart, name, OBJPROP_YSIZE, 20);
-      ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
-      ObjectSetString(g_chart, name, OBJPROP_TEXT, i == 0 ? "Previous" : "Next");
-   }
-}
-
-// Interpolate within a bar so 15/30-minute zones still have width on H1 charts.
-bool CalendarTimeX(const datetime time, const double price, int &x)
-{
-   int shift = iBarShift(_Symbol, _Period, time, false);
-   if(shift < 0)
-      return false;
-   datetime start = iTime(_Symbol, _Period, shift);
-   datetime end = (shift > 0 ? iTime(_Symbol, _Period, shift - 1) :
-                   start + PeriodSeconds(_Period));
-   int x1, x2, y;
-   if(end <= start || !ChartTimePriceToXY(g_chart, 0, start, price, x1, y) ||
-      !ChartTimePriceToXY(g_chart, 0, end, price, x2, y))
-      return false;
-   x = (int)MathRound(x1 + (double)(time - start) / (end - start) * (x2 - x1));
-   return true;
-}
-
-void RenderEconomicZones(const int width, const int height)
-{
-   if(!InpShowEconomicEvents)
-      return;
-   int offset = CalendarBrokerOffset();
-   double price = ChartGetDouble(g_chart, CHART_PRICE_MAX, 0);
-   for(int i = 0; i < ArraySize(g_events); i++)
-   {
-      datetime release = g_events[i].release_time + offset;
-      int before, at, after;
-      if(!CalendarTimeX(release - 1800, price, before) ||
-         !CalendarTimeX(release, price, at) ||
-         !CalendarTimeX(release + InpPostEventMinutes * 60, price, after))
-         continue;
-      int left = MathMax(0, before), right = MathMin(width - 1, at);
-      if(left <= right)
-         g_canvas.FillRectangle(left, 0, right, height - 1, ColorToARGB(clrLightGray, 22));
-      left = MathMax(0, at);
-      right = MathMin(width - 1, after);
-      if(left <= right)
-         g_canvas.FillRectangle(left, 0, right, height - 1, ColorToARGB(clrGold, 32));
-   }
 }
 
 //+------------------------------------------------------------------+
@@ -791,7 +531,6 @@ void RenderFills()
       g_height = height;
    }
    g_canvas.Erase(0); // Fully transparent background
-   RenderEconomicZones(width, height);
    for(int i = 0; i < g_box_count; i++)
    {
       int x1, y1, x2, y2;
