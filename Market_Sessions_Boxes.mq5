@@ -165,9 +165,12 @@ void OnDeinit(const int reason)
    if(g_rsi_m5 != INVALID_HANDLE)
       IndicatorRelease(g_rsi_m5);
    // An empty prefix would delete unrelated objects after invalid inputs.
-   // Removes boxes, labels, confirmation bars and the RSI label of this instance.
+   // Removes boxes, labels, confirmation arrows and the RSI label of this instance.
    if(g_prefix != "")
+   {
+      ObjectsDeleteAll(g_chart, g_prefix + "ConfirmArrow_");
       ObjectsDeleteAll(g_chart, g_prefix);
+   }
    ChartRedraw(g_chart);
 }
 
@@ -308,7 +311,7 @@ void UpdateSessions()
    {
       ObjectsDeleteAll(g_chart, g_prefix + "Box_");
       ObjectsDeleteAll(g_chart, g_prefix + "Label_");
-      ObjectsDeleteAll(g_chart, g_prefix + "ConfirmBar_");
+      ObjectsDeleteAll(g_chart, g_prefix + "ConfirmArrow_");
       g_day = today;
    }
 
@@ -378,7 +381,7 @@ void UpdateSessions()
          g_boxes[g_box_count] = box;
          g_box_count++;
          DrawObjects(key, s, start, end, box.high, box.low, box.final_color);
-         DrawConfirmationBar(box);
+         DrawConfirmationArrow(box);
       }
    }
    g_last_update = now;
@@ -387,29 +390,32 @@ void UpdateSessions()
 }
 
 //+------------------------------------------------------------------+
-//| Outline the M15 candle whose close confirmed the breakout.        |
+//| Mark the M15 candle whose close confirmed the breakout with a     |
+//| small orange arrow: up below the low for buys, down above the     |
+//| high for sells, with the tip touching the candle.                 |
 //+------------------------------------------------------------------+
-void DrawConfirmationBar(const SessionBox &box)
+void DrawConfirmationArrow(const SessionBox &box)
 {
    if(!box.evaluated || box.confirm_bar_time == 0)
       return;
-   string name = g_prefix + "ConfirmBar_" + IntegerToString((long)box.confirm_bar_time);
+   string name = g_prefix + "ConfirmArrow_" + IntegerToString((long)box.confirm_bar_time);
    if(ObjectFind(g_chart, name) >= 0)
       return;
    MqlRates bar[];
    if(CopyRates(_Symbol, PERIOD_M15, box.confirm_bar_time, 1, bar) <= 0 ||
       bar[0].time != box.confirm_bar_time)
       return; // M15 history not ready; retried on the next update
-   if(!ObjectCreate(g_chart, name, OBJ_RECTANGLE, 0,
-                    bar[0].time, bar[0].high,
-                    bar[0].time + PeriodSeconds(PERIOD_M15), bar[0].low))
+   bool buy = (box.final_color == clrGreen);
+   ENUM_OBJECT type = (buy ? OBJ_ARROW_UP : OBJ_ARROW_DOWN);
+   double price = (buy ? bar[0].low : bar[0].high);
+   if(!ObjectCreate(g_chart, name, type, 0, bar[0].time, price))
    {
-      Print("Unable to create confirmation bar. Error: ", GetLastError());
+      Print("Unable to create confirmation arrow. Error: ", GetLastError());
       return;
    }
+   ObjectSetInteger(g_chart, name, OBJPROP_ANCHOR, buy ? ANCHOR_TOP : ANCHOR_BOTTOM);
    ObjectSetInteger(g_chart, name, OBJPROP_COLOR, clrOrange);
-   ObjectSetInteger(g_chart, name, OBJPROP_WIDTH, 2);
-   ObjectSetInteger(g_chart, name, OBJPROP_FILL, false);
+   ObjectSetInteger(g_chart, name, OBJPROP_WIDTH, 1);
    ObjectSetInteger(g_chart, name, OBJPROP_BACK, false);
    ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);

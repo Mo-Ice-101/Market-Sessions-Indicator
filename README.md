@@ -45,7 +45,8 @@ price** is strictly above the session high turns the box **green** (buy);
 strictly below the session low turns it **red** (sell). Wicks, equality with
 either boundary, and closes inside the range do not signal a break; monitoring
 continues with the next candle. The M15 candle that confirmed the break is
-outlined with an **orange rectangle** (its high to low).
+marked with a small **orange arrow**: pointing up from just below its low for
+green (buy) breaks, pointing down from just above its high for red (sell) breaks.
 The final range and color are retained until the session leaves the configured
 history window. Historical sessions are evaluated the same way when loaded.
 
@@ -66,7 +67,7 @@ chart objects for borders and labels. Overlapping custom sessions are painted
 in chronological order, with Asian/London/NY order for the same opening day;
 the last fill takes precedence in overlapping pixels. Multiple indicator
 instances use separate object names. Removing or reconfiguring an instance
-cleans up only its own canvas, borders, labels, confirmation bars, and RSI label.
+cleans up only its own canvas, borders, labels, confirmation arrows, and RSI label.
 
 ## Manual verification (MetaTrader 5)
 
@@ -98,7 +99,8 @@ verification require MetaEditor/MT5.
 11. After confirmation, refresh, zoom, scroll, and wait across midnight: colors
    must persist within the history window. Reattach the indicator and confirm
    historical colors match the same rule.
-12. On an M15 chart, verify the orange rectangle surrounds exactly the candle
-   whose close first left the range, for green and red boxes.
+12. On an M15 chart, verify the small orange arrow marks exactly the candle
+   whose close first left the range: up arrow under green breaks, down arrow
+   over red breaks.
 13. Compare the RSI label with standard RSI(14) indicators on H1, M15 and M5
    charts; values change on every tick, including mid-candle.
