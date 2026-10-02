@@ -209,56 +209,56 @@ bool SessionRange(const datetime start, const datetime end,
 }
 
 //+------------------------------------------------------------------+
-//| Confirm only the first M15 bar opening at or after session close. |
-//| Look for the first M15 bar with time >= session close time.       |
-//| Wait for its close; an in-range close is also a final decision.   |
+//| Monitor M15 candles after session close until breakout detected.  |
+//| Check each M15 close: if > high (green) or < low (red), lock color.|
+//| Use body close only; in-range closes do not trigger evaluation.   |
 //+------------------------------------------------------------------+
 void ConfirmBreak(SessionBox &box, const datetime now)
 {
    int period = PeriodSeconds(PERIOD_M15);
    
-   // Only evaluate once
+   // Already evaluated, no more checks needed
    if(box.evaluated)
       return;
    
-   // Not enough time for M15 candle to close (wait until at least close_time + period)
-   if(now < box.close_time + period)
+   // Session hasn't closed yet, no M15 to check
+   if(now < box.close_time)
       return;
    
+   // Get all M15 bars from session close onwards
    MqlRates rates[];
-   // Get M15 data starting from session close time to now
    int count = CopyRates(_Symbol, PERIOD_M15, box.close_time, now, rates);
    
    if(count <= 0)
-      return;  // M15 data not available yet
+      return;  // M15 data not available yet, retry next update
    
-   // Find the first M15 bar whose open time is >= session close time
-   int bar_index = -1;
+   // Check each M15 bar starting from the first one after/at session close
    for(int i = 0; i < count; i++)
    {
-      if(rates[i].time >= box.close_time)
+      // Skip bars that closed before session ended
+      if(rates[i].time + period <= box.close_time)
+         continue;
+      
+      // Only check completed M15 bars (not the current open bar)
+      datetime bar_close_time = rates[i].time + period;
+      if(bar_close_time > now)
+         continue;  // Bar hasn't closed yet
+      
+      // Check body close for breakout (strictly greater or strictly less)
+      if(rates[i].close > box.high)
       {
-         bar_index = i;
-         break;
+         box.final_color = clrGreen;
+         box.evaluated = true;
+         return;
       }
+      else if(rates[i].close < box.low)
+      {
+         box.final_color = clrRed;
+         box.evaluated = true;
+         return;
+      }
+      // else: in-range close, keep checking subsequent candles
    }
-   
-   if(bar_index < 0)
-      return;  // No M15 bar found at or after session close
-   
-   // Check if this M15 bar has fully closed
-   int current_m15_open = (int)(now / period) * period;
-   if(rates[bar_index].time == current_m15_open && rates[bar_index].time + period > now)
-      return;  // Current M15 bar hasn't closed yet
-   
-   // Evaluate the breakout
-   if(rates[bar_index].close > box.high)
-      box.final_color = clrGreen;
-   else if(rates[bar_index].close < box.low)
-      box.final_color = clrRed;
-   // else: stays gray (in-range close)
-   
-   box.evaluated = true;
 }
 
 //+------------------------------------------------------------------+
@@ -344,7 +344,7 @@ void UpdateSessions()
             box.range_loaded = true;
          }
          
-         // Try to confirm breakout for this session
+         // Monitor for breakout on each M15 candle after session close
          ConfirmBreak(box, now);
          g_boxes[g_box_count] = box;
          g_box_count++;
