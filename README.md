@@ -1,5 +1,5 @@
 # Market-Sessions-Indicator
-MQL5 indicator that draws boxes around Asian, London, and NY trading sessions with customizable colors and transparency
+MQL5 indicator that draws boxes around Asian, London, and NY trading sessions with M15 breakout colors and customizable transparency
 
 ## Installation
 
@@ -11,17 +11,18 @@ MQL5 indicator that draws boxes around Asian, London, and NY trading sessions wi
 
 ## Defaults and inputs
 
-| Session | Open | Close | Color |
-| --- | --- | --- | --- |
-| Asian | 00:00 | 08:00 | Dodger blue |
-| London | 10:00 | 14:00 | Lime green |
-| NY | 14:30 | 21:00 | Orange-red |
+| Session | Open | Close |
+| --- | --- | --- |
+| Asian | 00:00 | 08:00 |
+| London | 10:00 | 14:00 |
+| NY | 14:30 | 21:00 |
 
 All hours are **broker server time**, assumed GMT+2. There is no timezone or
 daylight-saving conversion: adjust the inputs if your broker's clock differs.
-Each session has separate opening/closing hour and minute, color, and
+Each session has separate opening/closing hour and minute and
 transparency inputs. Transparency ranges from **0 (opaque) to 100 (invisible
-fill)**; borders and labels retain the selected color. The default is 85.
+fill)**; borders and labels match the block's signal color. The default is 85.
+The former per-session color inputs are replaced by automatic gray/green/red colors.
 
 - Show or hide session names; optionally append their opening times.
 - Set border width (1–5 pixels) and history (1–30 calendar days, default 5).
@@ -37,9 +38,22 @@ through the latest server quote. Future sessions and sessions without bars
 (such as weekends) are not drawn. Overnight sessions from the preceding day
 are retained when they intersect the configured history window.
 
+All boxes remain **gray** during the session and while awaiting confirmation.
+After the session closes, only the **first available M15 candle opening at or
+after the scheduled close** is evaluated, once that candle has closed. For
+example, an 08:00 close uses the 08:00–08:15 candle; an 08:07 close uses the
+08:15–08:30 candle. Trading gaps use the first available candle after the gap.
+Its **close price** strictly above the session high turns the box **green**
+(buy); strictly below the session low turns it **red** (sell). Wicks, equality
+with either boundary, and closes inside the range do not signal a break.
+An in-range close leaves the box gray permanently; later candles are ignored.
+The final range and color are retained until the session leaves the configured
+history window. Historical sessions are evaluated the same way when loaded.
+
 The indicator refreshes every 60 seconds and on each new chart bar, and
 repositions fills when the chart is scrolled, zoomed, or resized. M1 history
-may need to download before boxes appear; the timer retries automatically.
+may need to download before boxes appear; M15 history may also need to download
+before confirmation. The timer retries automatically.
 Ranges are limited to the minute history supplied by your broker. Between
 quotes, the server timestamp remains the last known quote time.
 
@@ -56,7 +70,7 @@ This repository has no automated test infrastructure. Compilation and visual
 verification require MetaEditor/MT5.
 
 1. Compile with F7 and check for errors/warnings, then attach to an M1 chart
-   with available history. Confirm the default times, colors, and labels.
+   with available history. Confirm the default times and labels.
 2. Compare each box's high/low with M1 candles in `[open, close)`. Check that
    a spike in the closing minute does not affect the preceding session.
 3. Switch to M5/H1: ranges should stay the same, including NY's 14:30 start.
@@ -69,3 +83,14 @@ verification require MetaEditor/MT5.
 7. Attach two instances, then remove one: the other instance and unrelated
    chart objects must remain. Invalid times, transparency, history length,
    and border width should reject initialization with a diagnostic.
+8. Observe an active session and its first post-session M15 candle: the box,
+   border, and label must remain gray until that candle closes. Check a close
+   above the session high (green) and one below the low (red), on M1 and H1 charts.
+9. Check wick-only breaks, closes exactly on either boundary, and in-range
+   closes: the box stays gray even if a later M15 candle breaks the range.
+10. Set a close between M15 openings (e.g. 08:07): ignore the 08:00 candle and
+   evaluate only 08:15 after it closes. Also check an overnight session and
+   a trading gap, using the first available post-close M15 candle.
+11. After confirmation, refresh, zoom, scroll, and wait across midnight: colors
+   must persist within the history window. Reattach the indicator and confirm
+   historical colors match the same first-candle rule.
