@@ -39,7 +39,7 @@ input bool InpShowTimeLabels = true; // Append opening time to session labels
 input int  InpBoxWidth       = 1;    // Border width: 1-5 pixels
 input int  InpDaysToShow     = 5;    // Calendar days including today: 1-30
 
-input group "Economic Calendar (shared fetcher EA)"
+input group "Economic Calendar (MT5 native)"
 input bool InpShowEconomicEvents = true;
 input bool InpEconomicAlerts = true; // Print upcoming/released events to the journal
 input bool InpAutoBrokerUTCOffset = true;
@@ -289,9 +289,9 @@ void UpdateEconomicEvents()
    if(!InpShowEconomicEvents)
       return;
    EventInfo incoming[];
-   datetime success, attempt;
+   datetime success;
    bool available;
-   if(ReadCalendarCache(incoming, success, attempt, available))
+   if(ReadNativeCalendar(incoming, success, available))
    {
       for(int i = 0; i < ArraySize(incoming); i++)
          for(int j = 0; j < ArraySize(g_events); j++)
@@ -372,9 +372,9 @@ void DrawEconomicEvents()
    g_event_page = MathMin(g_event_page, g_event_pages - 1);
    string status = "Economic calendar";
    if(!g_calendar_available || g_calendar_success == 0 || now - g_calendar_success > 7200)
-      status += " | API unavailable/stale" + (count > 0 ? " (last known data)" : " - start fetcher EA");
+      status += " | MT5 calendar unavailable/stale" + (count > 0 ? " (last known data)" : " - check MT5 Calendar tab");
    else if(count == 0)
-      status += " | No tracked events in feed";
+      status += " | No tracked USD events in next 14 days";
    if(g_calendar_success > 0)
       status += " | Updated " + TimeToString(g_calendar_success, TIME_DATE | TIME_MINUTES) + " UTC";
    status += " | Page " + IntegerToString(g_event_page + 1) + "/" + IntegerToString(g_event_pages);
