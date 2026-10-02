@@ -56,6 +56,7 @@ struct SessionBox
    color    final_color;
    bool     evaluated;
    bool     range_loaded;
+   datetime confirm_bar_time; // Open time of the M15 bar that confirmed the breakout
 };
 
 SessionInfo g_sessions[3];
@@ -69,6 +70,11 @@ int         g_box_count = 0;
 datetime    g_day = 0;
 datetime    g_last_update = 0;
 datetime    g_last_bar = 0;
+int         g_rsi_h1 = INVALID_HANDLE;
+int         g_rsi_m15 = INVALID_HANDLE;
+int         g_rsi_m5 = INVALID_HANDLE;
+
+#define RSI_PERIOD 14
 
 //+------------------------------------------------------------------+
 //| Reject invalid inputs rather than silently changing session times.|
@@ -131,6 +137,12 @@ int OnInit()
    ObjectSetInteger(g_chart, g_prefix + "Canvas", OBJPROP_BACK, true);
    ObjectSetInteger(g_chart, g_prefix + "Canvas", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(g_chart, g_prefix + "Canvas", OBJPROP_HIDDEN, true);
+   // iRSI returns handles; values are read with CopyBuffer once calculated.
+   g_rsi_h1 = iRSI(_Symbol, PERIOD_H1, RSI_PERIOD, PRICE_CLOSE);
+   g_rsi_m15 = iRSI(_Symbol, PERIOD_M15, RSI_PERIOD, PRICE_CLOSE);
+   g_rsi_m5 = iRSI(_Symbol, PERIOD_M5, RSI_PERIOD, PRICE_CLOSE);
+   if(g_rsi_h1 == INVALID_HANDLE || g_rsi_m15 == INVALID_HANDLE || g_rsi_m5 == INVALID_HANDLE)
+      Print("Unable to create RSI handles. Error: ", GetLastError());
    g_canvas.Erase(0);
    g_canvas.Update(false);
    if(ArrayResize(g_boxes, (InpDaysToShow + 1) * 3) < 0 || !EventSetTimer(60))
@@ -146,7 +158,14 @@ void OnDeinit(const int reason)
 {
    EventKillTimer();
    g_canvas.Destroy();
+   if(g_rsi_h1 != INVALID_HANDLE)
+      IndicatorRelease(g_rsi_h1);
+   if(g_rsi_m15 != INVALID_HANDLE)
+      IndicatorRelease(g_rsi_m15);
+   if(g_rsi_m5 != INVALID_HANDLE)
+      IndicatorRelease(g_rsi_m5);
    // An empty prefix would delete unrelated objects after invalid inputs.
+   // Removes boxes, labels, confirmation bars and the RSI label of this instance.
    if(g_prefix != "")
       ObjectsDeleteAll(g_chart, g_prefix);
    ChartRedraw(g_chart);
@@ -248,12 +267,14 @@ void ConfirmBreak(SessionBox &box, const datetime now)
       if(rates[i].close > box.high)
       {
          box.final_color = clrGreen;
+         box.confirm_bar_time = rates[i].time;
          box.evaluated = true;
          return;
       }
       else if(rates[i].close < box.low)
       {
          box.final_color = clrRed;
+         box.confirm_bar_time = rates[i].time;
          box.evaluated = true;
          return;
       }
@@ -281,6 +302,7 @@ void UpdateSessions()
    {
       ObjectsDeleteAll(g_chart, g_prefix + "Box_");
       ObjectsDeleteAll(g_chart, g_prefix + "Label_");
+      ObjectsDeleteAll(g_chart, g_prefix + "ConfirmBar_");
       g_day = today;
    }
 
@@ -311,6 +333,7 @@ void UpdateSessions()
          box.final_color = clrGray;
          box.evaluated = false;
          box.range_loaded = false;
+         box.confirm_bar_time = 0;
          
          // Check if box exists in previous state and restore it
          for(int i = 0; i < previous_count; i++)
@@ -349,10 +372,84 @@ void UpdateSessions()
          g_boxes[g_box_count] = box;
          g_box_count++;
          DrawObjects(key, s, start, end, box.high, box.low, box.final_color);
+         DrawConfirmationBar(box);
       }
    }
    g_last_update = now;
+   DrawRSILevels();
    RenderFills();
+}
+
+//+------------------------------------------------------------------+
+//| Outline the M15 candle whose close confirmed the breakout.        |
+//+------------------------------------------------------------------+
+void DrawConfirmationBar(const SessionBox &box)
+{
+   if(!box.evaluated || box.confirm_bar_time == 0)
+      return;
+   string name = g_prefix + "ConfirmBar_" + IntegerToString((long)box.confirm_bar_time);
+   if(ObjectFind(g_chart, name) >= 0)
+      return;
+   MqlRates bar[];
+   if(CopyRates(_Symbol, PERIOD_M15, box.confirm_bar_time, 1, bar) <= 0 ||
+      bar[0].time != box.confirm_bar_time)
+      return; // M15 history not ready; retried on the next update
+   if(!ObjectCreate(g_chart, name, OBJ_RECTANGLE, 0,
+                    bar[0].time, bar[0].high,
+                    bar[0].time + PeriodSeconds(PERIOD_M15), bar[0].low))
+   {
+      Print("Unable to create confirmation bar. Error: ", GetLastError());
+      return;
+   }
+   ObjectSetInteger(g_chart, name, OBJPROP_COLOR, clrOrange);
+   ObjectSetInteger(g_chart, name, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(g_chart, name, OBJPROP_FILL, false);
+   ObjectSetInteger(g_chart, name, OBJPROP_BACK, false);
+   ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
+}
+
+//+------------------------------------------------------------------+
+//| Latest RSI value of a handle, or a placeholder while calculating. |
+//+------------------------------------------------------------------+
+string RSIText(const int handle)
+{
+   double value[];
+   if(handle == INVALID_HANDLE || BarsCalculated(handle) <= 0 ||
+      CopyBuffer(handle, 0, 0, 1, value) <= 0)
+      return "--";
+   return DoubleToString(value[0], 2);
+}
+
+//+------------------------------------------------------------------+
+//| Show H1, M15 and M5 RSI in the chart's top-right corner.          |
+//+------------------------------------------------------------------+
+void DrawRSILevels()
+{
+   string name = g_prefix + "RSI_Label";
+   if(ObjectFind(g_chart, name) < 0)
+   {
+      if(!ObjectCreate(g_chart, name, OBJ_LABEL, 0, 0, 0))
+      {
+         Print("Unable to create RSI label. Error: ", GetLastError());
+         return;
+      }
+      ObjectSetInteger(g_chart, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+      ObjectSetInteger(g_chart, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+      ObjectSetInteger(g_chart, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(g_chart, name, OBJPROP_YDISTANCE, 20);
+      ObjectSetInteger(g_chart, name, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(g_chart, name, OBJPROP_BACK, false);
+      ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
+   }
+   // Foreground color stays readable on both light and dark chart themes.
+   ObjectSetInteger(g_chart, name, OBJPROP_COLOR,
+                    ChartGetInteger(g_chart, CHART_COLOR_FOREGROUND));
+   ObjectSetString(g_chart, name, OBJPROP_TEXT,
+                   "H1 RSI: " + RSIText(g_rsi_h1) +
+                   " | M15 RSI: " + RSIText(g_rsi_m15) +
+                   " | M5 RSI: " + RSIText(g_rsi_m5));
 }
 
 void DrawObjects(const string key, const int session,
