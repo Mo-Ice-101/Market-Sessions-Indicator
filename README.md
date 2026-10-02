@@ -51,8 +51,8 @@ history window. Historical sessions are evaluated the same way when loaded.
 
 The top-right corner shows the current **RSI(14, close)** of H1, M15 and M5:
 `H1 RSI: XX.XX | M15 RSI: XX.XX | M5 RSI: XX.XX`, regardless of the chart
-timeframe. It refreshes with the sessions (each new chart bar and every 60
-seconds); `--` is shown while a timeframe's history is still loading.
+timeframe. Values include the forming candle and refresh on **every tick**,
+not only on candle closes; `--` is shown while a timeframe's history is still loading.
 
 The indicator refreshes every 60 seconds and on each new chart bar, and
 repositions fills when the chart is scrolled, zoomed, or resized. M1 history
@@ -101,4 +101,4 @@ verification require MetaEditor/MT5.
 12. On an M15 chart, verify the orange rectangle surrounds exactly the candle
    whose close first left the range, for green and red boxes.
 13. Compare the RSI label with standard RSI(14) indicators on H1, M15 and M5
-   charts; values update with new candles.
+   charts; values change on every tick, including mid-candle.

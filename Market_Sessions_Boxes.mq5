@@ -186,6 +186,12 @@ int OnCalculate(const int rates_total, const int prev_calculated,
       g_last_bar = bar_time;
       UpdateSessions();
    }
+   else
+   {
+      // RSI uses the forming bar, so refresh the label on every tick.
+      DrawRSILevels();
+      ChartRedraw(g_chart);
+   }
    return rates_total;
 }
 
