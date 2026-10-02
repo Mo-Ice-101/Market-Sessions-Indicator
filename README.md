@@ -41,6 +41,22 @@ and release alerts can lag by one minute plus MT5's own publication delay.
 Native calendar calls are synchronous: if MT5's calendar service stalls, the
 query can temporarily delay this indicator and other indicators on the same symbol.
 
+### Resolving calendar compilation conflicts
+
+If MetaEditor reports duplicate `CalendarNativeNumber()` / `CalendarNativeUnit()`
+definitions or undefined identifiers such as `CalendarRefresh`,
+`ECONOMIC_CACHE_FILE`, or `ReadCalendarCache`, check for an older indicator paired
+with the native-only header. Replace **both** `Market_Sessions_Boxes.mq5` and
+`EconomicCalendar.mqh` with copies from the same revision of this repository in
+`MQL5/Indicators`; do not append the new code to the old files. Open that indicator
+file in MetaEditor and press **F7**. The two helpers belong only in
+`EconomicCalendar.mqh`; the indicator must not contain API/cache code.
+
+If using the optional EA, also replace `Market_Sessions_Calendar_Fetcher.mq5` and
+its adjacent `EconomicCalendar.mqh` in `MQL5/Experts` with the matching revision,
+then compile the EA with **F7**. There is no `EconomicCalendarEA.mq5` in this
+repository, and the old API-based EA is not needed.
+
 ## Economic events and gold bias
 
 - **US/USD:** CPI/core inflation/PCE, NFP/non-farm payrolls, Fed/FOMC rate
