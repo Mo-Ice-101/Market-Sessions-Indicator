@@ -209,24 +209,54 @@ bool SessionRange(const datetime start, const datetime end,
 
 //+------------------------------------------------------------------+
 //| Confirm only the first M15 bar opening at or after session close. |
+//| Look for the first M15 bar with time >= session close time.       |
 //| Wait for its close; an in-range close is also a final decision.   |
 //+------------------------------------------------------------------+
 void ConfirmBreak(SessionBox &box, const datetime now)
 {
    int period = PeriodSeconds(PERIOD_M15);
-   if(box.evaluated || now < box.close_time + period)
+   
+   // Only evaluate once confirmed breakout is final
+   if(box.evaluated)
       return;
+   
+   // Not enough time for M15 candle to close (wait until at least close_time + period)
+   if(now < box.close_time + period)
+      return;
+   
    MqlRates rates[];
+   // Get M15 data starting from session close time to now
    int count = CopyRates(_Symbol, PERIOD_M15, box.close_time, now, rates);
-   if(count <= 0 || !SeriesInfoInteger(_Symbol, PERIOD_M15, SERIES_SYNCHRONIZED))
-      return;
-   if(rates[0].time < box.close_time || now < rates[0].time + period ||
-      iTime(_Symbol, PERIOD_M15, 0) <= rates[0].time)
-      return;
-   if(rates[0].close > box.high)
+   
+   if(count <= 0)
+      return;  // M15 data not available yet
+   
+   // Find the first M15 bar whose open time is >= session close time
+   int bar_index = -1;
+   for(int i = 0; i < count; i++)
+   {
+      if(rates[i].time >= box.close_time)
+      {
+         bar_index = i;
+         break;
+      }
+   }
+   
+   if(bar_index < 0)
+      return;  // No M15 bar found at or after session close
+   
+   // Check if this M15 bar has fully closed
+   int current_m15_open = (int)(now / period) * period;
+   if(rates[bar_index].time == current_m15_open && rates[bar_index].time + period > now)
+      return;  // Current M15 bar hasn't closed yet
+   
+   // Evaluate the breakout
+   if(rates[bar_index].close > box.high)
       box.final_color = clrGreen;
-   else if(rates[0].close < box.low)
+   else if(rates[bar_index].close < box.low)
       box.final_color = clrRed;
+   // else: stays gray (in-range close)
+   
    box.evaluated = true;
 }
 
