@@ -16,7 +16,6 @@ input int   InpAsianOpenHour  = 0;
 input int   InpAsianOpenMin   = 0;
 input int   InpAsianCloseHour = 8;
 input int   InpAsianCloseMin  = 0;
-input color InpAsianColor    = clrDodgerBlue;
 input int   InpAsianTransp   = 85; // Transparency: 0 = opaque, 100 = invisible fill
 
 input group "London Session (server time)"
@@ -24,7 +23,6 @@ input int   InpLondonOpenHour  = 10;
 input int   InpLondonOpenMin   = 0;
 input int   InpLondonCloseHour = 14;
 input int   InpLondonCloseMin  = 0;
-input color InpLondonColor    = clrLimeGreen;
 input int   InpLondonTransp   = 85;
 
 input group "NY Session (server time)"
@@ -32,7 +30,6 @@ input int   InpNYOpenHour  = 14;
 input int   InpNYOpenMin   = 30;
 input int   InpNYCloseHour = 21;
 input int   InpNYCloseMin  = 0;
-input color InpNYColor    = clrOrangeRed;
 input int   InpNYTransp   = 85;
 
 input group "General Settings"
@@ -46,7 +43,6 @@ struct SessionInfo
    string name;
    int    open_minutes;
    int    close_minutes;
-   color  box_color;
    int    transparency;
 };
 
@@ -57,6 +53,8 @@ struct SessionBox
    datetime close_time;
    double   high;
    double   low;
+   color    final_color;
+   bool     evaluated;
 };
 
 SessionInfo g_sessions[3];
@@ -78,7 +76,7 @@ datetime    g_last_bar = 0;
 bool ConfigureSession(const int index, const string name,
                       const int open_hour, const int open_minute,
                       const int close_hour, const int close_minute,
-                      const color box_color, const int transparency)
+                      const int transparency)
 {
    if(open_hour < 0 || open_hour > 23 || close_hour < 0 || close_hour > 23 ||
       open_minute < 0 || open_minute > 59 || close_minute < 0 || close_minute > 59 ||
@@ -92,7 +90,6 @@ bool ConfigureSession(const int index, const string name,
    g_sessions[index].name = name;
    g_sessions[index].open_minutes = open_hour * 60 + open_minute;
    g_sessions[index].close_minutes = close_hour * 60 + close_minute;
-   g_sessions[index].box_color = box_color;
    g_sessions[index].transparency = transparency;
    return true;
 }
@@ -105,11 +102,11 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
    if(!ConfigureSession(0, "ASIAN", InpAsianOpenHour, InpAsianOpenMin,
-                        InpAsianCloseHour, InpAsianCloseMin, InpAsianColor, InpAsianTransp) ||
+                        InpAsianCloseHour, InpAsianCloseMin, InpAsianTransp) ||
       !ConfigureSession(1, "LONDON", InpLondonOpenHour, InpLondonOpenMin,
-                        InpLondonCloseHour, InpLondonCloseMin, InpLondonColor, InpLondonTransp) ||
+                        InpLondonCloseHour, InpLondonCloseMin, InpLondonTransp) ||
       !ConfigureSession(2, "NY", InpNYOpenHour, InpNYOpenMin,
-                        InpNYCloseHour, InpNYCloseMin, InpNYColor, InpNYTransp))
+                        InpNYCloseHour, InpNYCloseMin, InpNYTransp))
       return INIT_PARAMETERS_INCORRECT;
 
    g_chart = ChartID();
@@ -174,7 +171,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
 
 void OnTimer()
 {
-   // Also retries asynchronous M1 history requests without waiting for a tick.
+   // Also retries asynchronous M1/M15 history requests without waiting for a tick.
    UpdateSessions();
 }
 
@@ -211,6 +208,29 @@ bool SessionRange(const datetime start, const datetime end,
 }
 
 //+------------------------------------------------------------------+
+//| Confirm only the first M15 bar opening at or after session close. |
+//| Wait for its close; an in-range close is also a final decision.   |
+//+------------------------------------------------------------------+
+void ConfirmBreak(SessionBox &box, const datetime now)
+{
+   int period = PeriodSeconds(PERIOD_M15);
+   if(box.evaluated || now < box.close_time + period)
+      return;
+   MqlRates rates[];
+   int count = CopyRates(_Symbol, PERIOD_M15, box.close_time, now, rates);
+   if(count <= 0 || !SeriesInfoInteger(_Symbol, PERIOD_M15, SERIES_SYNCHRONIZED))
+      return;
+   if(rates[0].time < box.close_time || now < rates[0].time + period ||
+      iTime(_Symbol, PERIOD_M15, 0) <= rates[0].time)
+      return;
+   if(rates[0].close > box.high)
+      box.final_color = clrGreen;
+   else if(rates[0].close < box.low)
+      box.final_color = clrRed;
+   box.evaluated = true;
+}
+
+//+------------------------------------------------------------------+
 //| Keep date-specific objects in place, avoiding delete/create flicker.|
 //| The extra previous day retains overnight sessions on the first day.|
 //+------------------------------------------------------------------+
@@ -233,6 +253,10 @@ void UpdateSessions()
       g_day = today;
    }
 
+   SessionBox previous_boxes[];
+   int previous_count = g_box_count;
+   if(previous_count > 0)
+      ArrayCopy(previous_boxes, g_boxes, 0, 0, previous_count);
    g_box_count = 0;
    datetime oldest = today - (InpDaysToShow - 1) * 86400;
    for(int day = InpDaysToShow; day >= 0; day--)
@@ -247,20 +271,32 @@ void UpdateSessions()
          if(end <= oldest)
             continue;
          string key = IntegerToString(s) + "_" + IntegerToString((long)start);
-         double highest, lowest;
-         if(!SessionRange(start, end, now, highest, lowest))
+         SessionBox box;
+         box.session = s;
+         box.open_time = start;
+         box.close_time = end;
+         box.high = 0;
+         box.low = 0;
+         box.final_color = clrGray;
+         box.evaluated = false;
+         for(int i = 0; i < previous_count; i++)
+         {
+            if(previous_boxes[i].session == s && previous_boxes[i].open_time == start)
+            {
+               box = previous_boxes[i];
+               break;
+            }
+         }
+         if(!box.evaluated && !SessionRange(start, end, now, box.high, box.low))
          {
             ObjectDelete(g_chart, g_prefix + "Box_" + key);
             ObjectDelete(g_chart, g_prefix + "Label_" + key);
             continue;
          }
-         g_boxes[g_box_count].session = s;
-         g_boxes[g_box_count].open_time = start;
-         g_boxes[g_box_count].close_time = end;
-         g_boxes[g_box_count].high = highest;
-         g_boxes[g_box_count].low = lowest;
+         ConfirmBreak(box, now);
+         g_boxes[g_box_count] = box;
          g_box_count++;
-         DrawObjects(key, s, start, end, highest, lowest);
+         DrawObjects(key, s, start, end, box.high, box.low, box.final_color);
       }
    }
    g_last_update = now;
@@ -269,7 +305,7 @@ void UpdateSessions()
 
 void DrawObjects(const string key, const int session,
                  const datetime start, const datetime end,
-                 const double highest, const double lowest)
+                 const double highest, const double lowest, const color box_color)
 {
    string box = g_prefix + "Box_" + key;
    if(ObjectFind(g_chart, box) < 0)
@@ -283,9 +319,9 @@ void DrawObjects(const string key, const int session,
       ObjectSetInteger(g_chart, box, OBJPROP_BACK, true);
       ObjectSetInteger(g_chart, box, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(g_chart, box, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(g_chart, box, OBJPROP_COLOR, g_sessions[session].box_color);
       ObjectSetInteger(g_chart, box, OBJPROP_WIDTH, InpBoxWidth);
    }
+   ObjectSetInteger(g_chart, box, OBJPROP_COLOR, box_color);
    ObjectMove(g_chart, box, 0, start, highest);
    ObjectMove(g_chart, box, 1, end, lowest);
 
@@ -300,7 +336,6 @@ void DrawObjects(const string key, const int session,
          return;
       }
       ObjectSetInteger(g_chart, label, OBJPROP_ANCHOR, ANCHOR_LEFT_LOWER);
-      ObjectSetInteger(g_chart, label, OBJPROP_COLOR, g_sessions[session].box_color);
       ObjectSetInteger(g_chart, label, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(g_chart, label, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(g_chart, label, OBJPROP_HIDDEN, true);
@@ -309,6 +344,7 @@ void DrawObjects(const string key, const int session,
          text += " " + TimeToString(start, TIME_MINUTES);
       ObjectSetString(g_chart, label, OBJPROP_TEXT, text);
    }
+   ObjectSetInteger(g_chart, label, OBJPROP_COLOR, box_color);
    ObjectMove(g_chart, label, 0, start, highest);
 }
 
@@ -349,7 +385,7 @@ void RenderFills()
       int s = g_boxes[i].session;
       uchar alpha = (uchar)MathRound(255.0 * (100 - g_sessions[s].transparency) / 100.0);
       g_canvas.FillRectangle(left, top, right, bottom,
-                             ColorToARGB(g_sessions[s].box_color, alpha));
+                             ColorToARGB(g_boxes[i].final_color, alpha));
    }
    g_canvas.Update(false);
    ChartRedraw(g_chart);
