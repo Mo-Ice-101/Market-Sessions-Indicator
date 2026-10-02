@@ -4,130 +4,10 @@ MQL5 indicator that draws boxes around Asian, London, and NY trading sessions wi
 ## Installation
 
 1. In MetaTrader 5, select **File → Open Data Folder**.
-2. Copy `Market_Sessions_Boxes.mq5` and `EconomicCalendar.mqh` into `MQL5/Indicators`.
+2. Copy `Market_Sessions_Boxes.mq5` into `MQL5/Indicators`.
 3. Open the file in MetaEditor and compile with **F7**. The included
    `Canvas/Canvas.mqh` is part of MT5's standard library; no downloads are needed.
 4. Refresh **Navigator → Indicators** and attach **Market Sessions Boxes** to a chart.
-
-### Economic calendar setup
-
-The overlay is part of **Market Sessions Boxes**, not a separate indicator.
-It reads only [MT5's built-in economic calendar](https://www.mql5.com/en/docs/calendar)
-using `CalendarValueHistory()` and `CalendarEventById()`, including forecasts,
-previous values, and released actuals. There are **no third-party APIs, API keys,
-WebRequest calls, URL permissions, or shared cache files**.
-
-1. Copy `EconomicCalendar.mqh` alongside `Market_Sessions_Boxes.mq5` in
-   `MQL5/Indicators`, compile `Market_Sessions_Boxes.mq5` with F7, and attach it.
-2. Leave `InpShowEconomicEvents=true`. The indicator reads the native calendar
-   immediately on loading and once per minute; **no EA is required**.
-3. The existing `Market_Sessions_Calendar_Fetcher.mq5` (the companion EA in this
-   repository) is now an **optional non-trading native-calendar monitor**. To use
-   it, copy it and `EconomicCalendar.mqh` into `MQL5/Experts`, compile with F7,
-   and attach it to a chart. It logs the relevant event count immediately and
-   every minute; chart labels still belong to the indicator.
-
-This works independently of broker WebRequest restrictions, including on Weltrade,
-provided the terminal's native calendar service is available. No external internet
-feed is contacted by this code, but **MT5 itself needs connectivity to synchronize
-its calendar**; fresh schedules and results cannot be guaranteed offline.
-Check the terminal's **Calendar** tab if no data is available. Native retrieval is
-not supported in the Strategy Tester.
-
-Failures preserve the attached indicator's last-known labels in memory and show
-an unavailable/stale status rather than blanking the display. No data is persisted
-between attachments. Data older than two hours is marked stale. Actual results
-and release alerts can lag by one minute plus MT5's own publication delay.
-Native calendar calls are synchronous: if MT5's calendar service stalls, the
-query can temporarily delay this indicator and other indicators on the same symbol.
-
-### Resolving calendar compilation conflicts
-
-If MetaEditor reports duplicate `CalendarNativeNumber()` / `CalendarNativeUnit()`
-definitions or undefined identifiers such as `CalendarRefresh`,
-`ECONOMIC_CACHE_FILE`, or `ReadCalendarCache`, check for an older indicator paired
-with the native-only header. Replace **both** `Market_Sessions_Boxes.mq5` and
-`EconomicCalendar.mqh` with copies from the same revision of this repository in
-`MQL5/Indicators`; do not append the new code to the old files. Open that indicator
-file in MetaEditor and press **F7**. The two helpers belong only in
-`EconomicCalendar.mqh`; the indicator must not contain API/cache code.
-
-If using the optional EA, also replace `Market_Sessions_Calendar_Fetcher.mq5` and
-its adjacent `EconomicCalendar.mqh` in `MQL5/Experts` with the matching revision,
-then compile the EA with **F7**. There is no `EconomicCalendarEA.mq5` in this
-repository, and the old API-based EA is not needed.
-
-## Economic events and gold bias
-
-- **US/USD:** CPI/core inflation/PCE, NFP/non-farm payrolls, Fed/FOMC rate
-  decisions and announcements, unemployment, retail sales, PPI, Treasury
-  auctions, jobless claims, and GDP/recession data.
-
-Only **USD** events in these categories are included to reduce clutter; EUR/ECB,
-CNY/China, and unrelated USD reports are excluded. Event classification also uses
-MT5's native event identifiers so it does not depend solely on translated titles.
-Only events actually supplied by MT5 can be displayed.
-Untimed/tentative announcements are excluded rather than assigning invented
-release times, countdowns, or volatility windows.
-The next **14 days** of events and the last 24 hours of releases are visible on **every
-timeframe**, including M1, M5, M15 and H1, without M15 confirmation.
-
-Stacked labels show, for example:
-
-```text
-Core CPI | Forecast: 3.2% | Time: 45 min | Impact: HIGH
-2026.10.02 12:30 UTC | Gold: → Neutral
-Core CPI | Forecast: 3.2% | Actual: 3.4% | Surprise: +0.20 pp (+6.25%) | Impact: HIGH
-2026.10.02 12:30 UTC | Gold: ↓ Bearish
-```
-
-Impact text is red for **HIGH**, yellow/gold for **MED**, green for **LOW**.
-Emoji appearance depends on the terminal's fonts. Gold arrows have their own
-color: **red ↓ Bearish**, **green ↑ Bullish**, or **→ Neutral**. Labels do not
-overlap; use **Previous/Next** when the full feed exceeds the chart height.
-All events remain available on each timeframe, even when not on the current
-page. Widen the chart to read long event names.
-
-Surprise is **actual − forecast**, plus the relative surprise
-`(actual − forecast) / abs(forecast) × 100` when forecast is nonzero.
-Percent data differences use **percentage points (pp)**. Missing or nonnumeric
-values show `--`, not a fabricated zero.
-
-Bias is a **simple economic heuristic, not an AI prediction or trading signal**:
-
-- Stronger-than-forecast US inflation, payrolls, retail sales, or growth:
-  bearish gold; weaker data: bullish gold; equal results: neutral.
-- Unemployment/jobless claims invert that rule: higher is weaker employment
-  and bullish gold.
-- Fed rate hikes/cuts compare actual with the **previous rate**, when supplied,
-  so an expected hike still reads bearish and an expected cut bullish.
-- Negative GDP growth (not GDP price indexes)
-  and explicit affirmative recession reports are treated as bullish
-  recession/safe-haven signals, overriding the surprise rule.
-- Fed statements and Treasury auctions remain neutral without a reliable
-  directional rule; missing actuals/forecasts cannot establish a surprise.
-
-Actual gold prices may move differently because of expectations, revisions,
-positioning, yields, or geopolitical news.
-
-Light gray background strips cover **30 minutes before** each event; gold
-strips cover **30 minutes after** (configurable to 15–30). They span the chart's
-height and are painted behind session boxes. Intrabar time interpolation keeps
-short windows visible even on H1. Labels/countdowns use **UTC**; zone anchors
-convert UTC to broker time. Automatic broker-offset detection uses
-`TimeTradeServer() − TimeGMT()` and depends on the computer's correct clock.
-Disable it and set `InpBrokerUTCOffsetMinutes` manually if necessary, including
-after broker daylight-saving changes. Native calendar timestamps are converted
-using the current broker offset throughout the fetch window; a window spanning
-a broker daylight-saving transition may need time checks on either side.
-
-Journal alerts fire once per event per attached instance while it is within
-one hour, and once when a released actual first becomes available. Reattaching
-an indicator resets those flags; multiple charts can each print an alert.
-Set `InpEconomicAlerts=false` to suppress duplicates, or
-`InpShowEconomicEvents=false` to disable the overlay. Events more than 24 hours
-old are pruned; removing an indicator deletes only its own calendar labels,
-buttons, and canvas zones along with its session objects.
 
 ## Defaults and inputs
 
@@ -187,8 +67,7 @@ chart objects for borders and labels. Overlapping custom sessions are painted
 in chronological order, with Asian/London/NY order for the same opening day;
 the last fill takes precedence in overlapping pixels. Multiple indicator
 instances use separate object names. Removing or reconfiguring an instance
-cleans up only its own canvas, borders, labels, confirmation arrows, RSI label,
-and economic-calendar objects.
+cleans up only its own canvas, borders, labels, confirmation arrows, and RSI label.
 
 ## Manual verification (MetaTrader 5)
 
@@ -225,41 +104,3 @@ verification require MetaEditor/MT5.
    over red breaks.
 13. Compare the RSI label with standard RSI(14) indicators on H1, M15 and M5
    charts; values change on every tick, including mid-candle.
-
-### Economic calendar verification (live MT5)
-
-1. Compile the indicator and optional EA without errors/warnings. With no EA
-   attached and no WebRequest URLs configured, load the indicator on Weltrade
-   or another MT5 broker. Confirm CPI/NFP/FOMC entries present in MT5's Calendar
-   tab within the next 14 days, forecasts, impact colors, UTC dates, and countdowns.
-   Confirm EUR/CNY and unrelated USD reports are absent. Attach the optional EA
-   separately and verify its native event-count log; it never places orders.
-2. Attach the indicator to M1, M5, M15, and H1 for the same symbol. Compare
-   event names/times and countdowns. Resize to a short chart and navigate
-   Previous/Next: all entries should remain accessible without overlapping rows.
-3. Around a known release, compare its UTC time with MT5's Calendar tab and broker
-   clock. Verify the gray 30-minute pre-event strip and gold 15/30-minute
-   post-event strip on all four timeframes, including fractional H1 widths.
-   Scroll, zoom, and change the broker offset; session boxes/RSI must be unchanged.
-4. Observe CPI, NFP, and a Fed decision in the native calendar.
-   After the next minute update, check actual/forecast/previous against MT5:
-   hotter CPI/stronger NFP are bearish, weaker results bullish, equal results
-   neutral. Verify a rate hike versus previous is bearish even when expected.
-   Higher unemployment/claims must be bullish; missing values stay neutral.
-5. Check positive/negative/zero forecasts, percent and K/M-suffixed figures:
-   surprises must be signed, percentage-point units correct, and zero forecasts
-   must not cause division by zero. Auctions/Fed statements should not invent
-   bias from incomparable numbers.
-6. Within an hour of a future release, check the journal for one alert per
-   instance; repeated minute ticks should not repeat it. Confirm one actual
-   release alert after results arrive, not merely when the clock passes release.
-7. Verify operation without any WebRequest allowlist entries. If native calendar
-   retrieval fails, confirm last-known labels remain with MT5-calendar-unavailable
-   status. Restore calendar availability and verify automatic recovery on the
-   next minute update. A fresh attachment with no native data should suggest
-   checking the MT5 Calendar tab, not starting an EA or adding URLs.
-8. Leave the indicator running through a release/day/week rollover. Verify minute
-   updates, removal of cancelled/rescheduled future events, updated actuals,
-   and removal of events older than 24 hours. Switch timeframes and remove one
-   of two indicator instances: no calendar objects should be orphaned, and the
-   remaining instance/session boxes should continue to work.
