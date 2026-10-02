@@ -70,6 +70,8 @@ not the Strategy Tester.
 
 These are gold-relevant events, not all necessarily denominated in USD.
 Only events actually supplied by the selected provider can be displayed.
+Untimed/tentative announcements are excluded rather than assigning invented
+release times, countdowns, or volatility windows.
 Upcoming events and the last 24 hours of releases are visible on **every
 timeframe**, including M1, M5, M15 and H1, without M15 confirmation.
 
