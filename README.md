@@ -38,6 +38,8 @@ Failures preserve the attached indicator's last-known labels in memory and show
 an unavailable/stale status rather than blanking the display. No data is persisted
 between attachments. Data older than two hours is marked stale. Actual results
 and release alerts can lag by one minute plus MT5's own publication delay.
+Native calendar calls are synchronous: if MT5's calendar service stalls, the
+query can temporarily delay this indicator and other indicators on the same symbol.
 
 ## Economic events and gold bias
 
