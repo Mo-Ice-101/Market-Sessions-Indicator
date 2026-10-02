@@ -39,16 +39,20 @@ through the latest server quote. Future sessions and sessions without bars
 are retained when they intersect the configured history window.
 
 All boxes remain **gray** during the session and while awaiting confirmation.
-After the session closes, only the **first available M15 candle opening at or
-after the scheduled close** is evaluated, once that candle has closed. For
-example, an 08:00 close uses the 08:00–08:15 candle; an 08:07 close uses the
-08:15–08:30 candle. Trading gaps use the first available candle after the gap.
-Its **close price** strictly above the session high turns the box **green**
-(buy); strictly below the session low turns it **red** (sell). Wicks, equality
-with either boundary, and closes inside the range do not signal a break.
-An in-range close leaves the box gray permanently; later candles are ignored.
+After the session closes, each **completed M15 candle** after the close is
+checked in order until one breaks the range. The first candle whose **close
+price** is strictly above the session high turns the box **green** (buy);
+strictly below the session low turns it **red** (sell). Wicks, equality with
+either boundary, and closes inside the range do not signal a break; monitoring
+continues with the next candle. The M15 candle that confirmed the break is
+outlined with an **orange rectangle** (its high to low).
 The final range and color are retained until the session leaves the configured
 history window. Historical sessions are evaluated the same way when loaded.
+
+The top-right corner shows the current **RSI(14, close)** of H1, M15 and M5:
+`H1 RSI: XX.XX | M15 RSI: XX.XX | M5 RSI: XX.XX`, regardless of the chart
+timeframe. Values include the forming candle and refresh on **every tick**,
+not only on candle closes; `--` is shown while a timeframe's history is still loading.
 
 The indicator refreshes every 60 seconds and on each new chart bar, and
 repositions fills when the chart is scrolled, zoomed, or resized. M1 history
@@ -62,7 +66,7 @@ chart objects for borders and labels. Overlapping custom sessions are painted
 in chronological order, with Asian/London/NY order for the same opening day;
 the last fill takes precedence in overlapping pixels. Multiple indicator
 instances use separate object names. Removing or reconfiguring an instance
-cleans up only its own canvas, borders, and labels.
+cleans up only its own canvas, borders, labels, confirmation bars, and RSI label.
 
 ## Manual verification (MetaTrader 5)
 
@@ -87,10 +91,14 @@ verification require MetaEditor/MT5.
    border, and label must remain gray until that candle closes. Check a close
    above the session high (green) and one below the low (red), on M1 and H1 charts.
 9. Check wick-only breaks, closes exactly on either boundary, and in-range
-   closes: the box stays gray even if a later M15 candle breaks the range.
+   closes: they do not signal; the first later M15 close outside the range does.
 10. Set a close between M15 openings (e.g. 08:07): ignore the 08:00 candle and
-   evaluate only 08:15 after it closes. Also check an overnight session and
-   a trading gap, using the first available post-close M15 candle.
+   start with 08:15 after it closes. Also check an overnight session and a
+   trading gap.
 11. After confirmation, refresh, zoom, scroll, and wait across midnight: colors
    must persist within the history window. Reattach the indicator and confirm
-   historical colors match the same first-candle rule.
+   historical colors match the same rule.
+12. On an M15 chart, verify the orange rectangle surrounds exactly the candle
+   whose close first left the range, for green and red boxes.
+13. Compare the RSI label with standard RSI(14) indicators on H1, M15 and M5
+   charts; values change on every tick, including mid-candle.
