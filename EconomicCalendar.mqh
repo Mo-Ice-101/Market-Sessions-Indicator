@@ -222,13 +222,18 @@ bool ReadNativeCalendar(EventInfo &events[],datetime &last_success,bool &availab
    // Calendar queries use server time; the existing overlay expects UTC.
    long offset=(long)MathRound((double)(server_now-utc_now)/60.0)*60;
    if(offset<-14*3600 || offset>14*3600) return false;
+   datetime today_start=utc_now-utc_now%86400;
+   datetime today_end=today_start+86400;
    MqlCalendarValue values[];
    ResetLastError();
-   int count=CalendarValueHistory(values,server_now-86400,server_now+14*86400,NULL,"USD");
+   int count=CalendarValueHistory(values,(datetime)(today_start+offset),
+                                  (datetime)(today_end+offset),NULL,"USD");
    if(count<0) return false;
    EventInfo fetched[];
    for(int i=0;i<count;i++)
    {
+      datetime release_time=(datetime)((long)values[i].time-offset);
+      if(release_time<today_start || release_time>=today_end) continue;
       MqlCalendarEvent report;
       if(!CalendarEventById(values[i].event_id,report)) return false;
       string code=report.event_code;
@@ -241,7 +246,7 @@ bool ReadNativeCalendar(EventInfo &events[],datetime &last_success,bool &availab
       EventInfo event;
       event.name=report.name;
       event.event_code=code;
-      event.release_time=(datetime)((long)values[i].time-offset);
+      event.release_time=release_time;
       event.impact_level=(int)report.importance;
       event.actual=CalendarNativeNumber(values[i].actual_value);
       event.forecast=CalendarNativeNumber(values[i].forecast_value);

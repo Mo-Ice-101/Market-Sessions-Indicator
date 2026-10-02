@@ -313,10 +313,11 @@ void UpdateEconomicEvents()
    else
       g_calendar_available = false;
    datetime now = TimeGMT();
+   datetime today_start = now - now % 86400;
    int retained = 0;
    for(int i = 0; i < ArraySize(g_events); i++)
    {
-      if(g_events[i].release_time < now - 86400)
+      if(g_events[i].release_time < today_start || g_events[i].release_time >= today_start + 86400)
          continue;
       g_events[i].gold_impact_direction = CalendarGoldDirection(g_events[i]);
       long remaining = g_events[i].release_time - now;
@@ -374,7 +375,7 @@ void DrawEconomicEvents()
    if(!g_calendar_available || g_calendar_success == 0 || now - g_calendar_success > 7200)
       status += " | MT5 calendar unavailable/stale" + (count > 0 ? " (last known data)" : " - check MT5 Calendar tab");
    else if(count == 0)
-      status += " | No tracked USD events in next 14 days";
+      status += " | No tracked USD events today (UTC)";
    if(g_calendar_success > 0)
       status += " | Updated " + TimeToString(g_calendar_success, TIME_DATE | TIME_MINUTES) + " UTC";
    status += " | Page " + IntegerToString(g_event_page + 1) + "/" + IntegerToString(g_event_pages);

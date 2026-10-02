@@ -34,7 +34,7 @@ its calendar**; fresh schedules and results cannot be guaranteed offline.
 Check the terminal's **Calendar** tab if no data is available. Native retrieval is
 not supported in the Strategy Tester.
 
-Failures preserve the attached indicator's last-known labels in memory and show
+Failures preserve the attached indicator's last-known labels for today (UTC) in memory and show
 an unavailable/stale status rather than blanking the display. No data is persisted
 between attachments. Data older than two hours is marked stale. Actual results
 and release alerts can lag by one minute plus MT5's own publication delay.
@@ -69,8 +69,9 @@ MT5's native event identifiers so it does not depend solely on translated titles
 Only events actually supplied by MT5 can be displayed.
 Untimed/tentative announcements are excluded rather than assigning invented
 release times, countdowns, or volatility windows.
-The next **14 days** of events and the last 24 hours of releases are visible on **every
-timeframe**, including M1, M5, M15 and H1, without M15 confirmation.
+Only **today's UTC events** (00:00 inclusive to the next midnight exclusive) are
+visible on **every timeframe**, including M1, M5, M15 and H1, without M15 confirmation.
+Earlier releases today remain visible; yesterday's and future dates' events are excluded.
 
 Stacked labels show, for example:
 
@@ -125,8 +126,8 @@ Journal alerts fire once per event per attached instance while it is within
 one hour, and once when a released actual first becomes available. Reattaching
 an indicator resets those flags; multiple charts can each print an alert.
 Set `InpEconomicAlerts=false` to suppress duplicates, or
-`InpShowEconomicEvents=false` to disable the overlay. Events more than 24 hours
-old are pruned; removing an indicator deletes only its own calendar labels,
+`InpShowEconomicEvents=false` to disable the overlay. Events outside today's UTC
+date are pruned; removing an indicator deletes only its own calendar labels,
 buttons, and canvas zones along with its session objects.
 
 ## Defaults and inputs
@@ -231,7 +232,9 @@ verification require MetaEditor/MT5.
 1. Compile the indicator and optional EA without errors/warnings. With no EA
    attached and no WebRequest URLs configured, load the indicator on Weltrade
    or another MT5 broker. Confirm CPI/NFP/FOMC entries present in MT5's Calendar
-   tab within the next 14 days, forecasts, impact colors, UTC dates, and countdowns.
+   tab for today's UTC date, forecasts, impact colors, UTC dates, and countdowns.
+   Verify events at 00:00 and 23:59:59 UTC are included, but yesterday's and
+   tomorrow's events are absent, even when the broker's date differs from UTC.
    Confirm EUR/CNY and unrelated USD reports are absent. Attach the optional EA
    separately and verify its native event-count log; it never places orders.
 2. Attach the indicator to M1, M5, M15, and H1 for the same symbol. Compare
@@ -254,12 +257,13 @@ verification require MetaEditor/MT5.
    instance; repeated minute ticks should not repeat it. Confirm one actual
    release alert after results arrive, not merely when the clock passes release.
 7. Verify operation without any WebRequest allowlist entries. If native calendar
-   retrieval fails, confirm last-known labels remain with MT5-calendar-unavailable
-   status. Restore calendar availability and verify automatic recovery on the
+   retrieval fails, confirm today's last-known labels remain with MT5-calendar-unavailable
+   status; after UTC midnight, yesterday's labels must disappear even if retrieval
+   still fails. Restore calendar availability and verify automatic recovery on the
    next minute update. A fresh attachment with no native data should suggest
    checking the MT5 Calendar tab, not starting an EA or adding URLs.
 8. Leave the indicator running through a release/day/week rollover. Verify minute
    updates, removal of cancelled/rescheduled future events, updated actuals,
-   and removal of events older than 24 hours. Switch timeframes and remove one
+   and removal of events from previous UTC dates. Switch timeframes and remove one
    of two indicator instances: no calendar objects should be orphaned, and the
    remaining instance/session boxes should continue to work.
