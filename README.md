@@ -32,36 +32,43 @@ The former per-session color inputs are replaced by automatic gray/green/red col
 
 ## Timezones and automatic DST
 
-- `InpBrokerUTCOffset` is the broker's **standard/non-DST UTC offset in hours**
-  (default `2.0`, range -14 to +14). Fractional offsets such as `5.5` or `5.75`
-  are supported, rounded to the nearest minute.
-- `InpDetectBrokerOffset` (default `true`) measures the live offset using
-  `TimeTradeServer() - TimeGMT()` and subtracts the configured broker DST advance
-  to infer the standard offset. It refreshes automatically. This needs a correct
-  computer clock/timezone; disable it to use `InpBrokerUTCOffset` explicitly.
-  Detection is disabled in the strategy tester, where MT5's `TimeGMT()` equals
-  simulated server time; the configured base offset is used there. Detection
-  is also disabled for Australia/NZ: their local transition instants require
-  a known standard offset and a single live reading is ambiguous at fall-back.
-  Set the correct `InpBrokerUTCOffset` for these presets; DST is still automatic.
-- `InpBrokerDSTRule` selects the broker's clock-change policy. The default is
-  `BROKER_DST_EUROPE`. Choose **`BROKER_DST_NONE` for a fixed-offset broker**.
-  `BROKER_DST_US` is for brokers switching at New York's transition instants
-  (including many GMT+2/+3 brokers), not necessarily at their own local 02:00.
-  `BROKER_DST_AUSTRALIA` and `BROKER_DST_NZ` use local transition times.
-- `InpBrokerDSTMinutes` is the broker's DST clock advance (default 60, range
-  1–120); it is ignored for `BROKER_DST_NONE`.
+- `InpDetectBrokerOffset` (default `true`) automatically measures
+  `TimeTradeServer() - TimeGMT()` while connected and receiving recent quotes.
+  No broker timezone configuration is needed for the live offset. This requires
+  a correct computer clock/timezone. Disconnected or stale quotes are not sampled.
+- Observations are saved once per UTC day and whenever the offset changes, in a
+  broker-server-specific `MSB_Offsets_*.csv` file in the terminal's `MQL5/Files`
+  sandbox. At startup the indicator reloads the last 370 days of observations.
+  Equal January/July offsets with no observed changes select `BROKER_DST_NONE`.
+  Changed offsets are compared against Europe, US, Australia and NZ rules; a
+  rule is selected only when exactly one matches all recent observations.
+  The observed clock advance is detected too.
+- A label below the RSI shows the broker's current UTC offset and DST policy.
+  **DST: unverified** means there is insufficient or ambiguous evidence. The
+  current offset is used provisionally, with recorded offsets used for earlier
+  observed dates. Dates before the first observation use the current offset.
+  Consequently historical boxes can be inaccurate across an unobserved clock
+  change until the policy is learned or an explicit fallback is configured.
+- MT5 does **not** provide historical UTC offsets for arbitrary winter/summer
+  dates: candle/tick timestamps alone cannot supply them. A first installation
+  cannot instantly determine a broker's DST policy. January/July readings alone
+  also cannot distinguish Europe from US; observations near their differing
+  transition dates are needed. Detection models recurring rules, not arbitrary
+  broker policy changes. Keep the indicator running to collect evidence.
+- Manual inputs remain as an optional fallback: disable `InpDetectBrokerOffset`,
+  set `InpBrokerUTCOffset` to the **standard/non-DST offset in hours** (default
+  `2.0`, range -14 to +14; fractional offsets supported), `InpBrokerDSTRule`
+  (default `BROKER_DST_NONE`), and `InpBrokerDSTMinutes` (default 60, range 1–120).
+  The strategy tester always uses these inputs because its `TimeGMT()` equals
+  simulated server time; it neither reads nor writes live observations.
+  `BROKER_DST_US` switches at New York's UTC transition instants, including for
+  GMT+2/+3 brokers; Australia/NZ use local transition times.
 
-The broker's current offset **cannot identify its historical DST policy**.
-Select the rule matching your broker once; subsequent transitions require no
-manual changes. Brokers with a custom calendar outside these presets require
-an explicit fixed offset (`BROKER_DST_NONE`, detection disabled) and manual
-updates when their clocks change. Do not select Europe merely because the
-broker's winter offset is GMT+2.
-
-London follows the UK/European rule: DST starts on the last Sunday in March
+London always follows the UK/European rule, independently of broker detection:
+DST starts on the last Sunday in March
 at 01:00 UTC and ends on the last Sunday in October at 01:00 UTC. New York
-follows the modern US rule (2007 onward): second Sunday in March at 07:00 UTC
+always follows the modern US rule (2007 onward), independently of the broker:
+second Sunday in March at 07:00 UTC
 through first Sunday in November at 06:00 UTC. Australian DST runs from the
 first Sunday in October at local standard 02:00 to the first Sunday in April
 at local daylight 03:00; New Zealand starts on the last Sunday in September
@@ -122,7 +129,8 @@ chart objects for borders and labels. Overlapping custom sessions are painted
 in chronological order, with Asian/London/NY order for the same opening day;
 the last fill takes precedence in overlapping pixels. Multiple indicator
 instances use separate object names. Removing or reconfiguring an instance
-cleans up only its own canvas, borders, labels, confirmation arrows, and RSI label.
+cleans up only its own canvas, borders, labels, confirmation arrows, RSI label,
+and timezone label, including after partial initialization failures.
 
 ## Manual verification (MetaTrader 5)
 
@@ -130,8 +138,9 @@ This repository has no automated test infrastructure. Compilation and visual
 verification require MetaEditor/MT5.
 
 1. Compile with F7 and check for errors/warnings, then attach to an M1 chart
-   with available history. Configure the broker timezone/rule and confirm the
-   adjusted times and labels against the examples above.
+   with available history. Leave automatic detection enabled and compare the
+   chart's broker UTC offset with server time minus UTC. On a fresh installation,
+   check that DST is reported as unverified, rather than a guessed Europe rule.
 2. Compare each box's high/low with M1 candles in `[open, close)`. Check that
    a spike in the closing minute does not affect the preceding session.
 3. Switch to M5/H1: ranges should stay the same, including NY's 14:30 start.
@@ -174,3 +183,13 @@ verification require MetaEditor/MT5.
    the oldest displayed day. Test Australia/NZ across September/October and
    April, including a year boundary. Invalid offsets/DST advances must reject
    initialization. Compare live detection with an explicitly configured offset.
+17. Reattach with automatic detection enabled and check that observations reload.
+   Compare recorded January/July offsets: unchanged offsets select None; changed
+   offsets remain unverified until the transition-date evidence uniquely selects
+   a rule. Compare London/NY times on fixed GMT+2 and seasonal GMT+2/+3 brokers:
+   their regional rules must not change with the detected broker policy.
+18. Disconnect the terminal or wait through a weekend without fresh quotes:
+   no new offset observations should be saved. A fresh instance without a live
+   measurement shows "waiting for live quotes" and waits before drawing boxes.
+   Remove each instance and check the Objects List (including hidden objects):
+   no owned objects should remain, and other instances/manual drawings survive.
