@@ -187,8 +187,17 @@ void LoadBrokerObservations()
    datetime cutoff = TimeGMT() - 370 * 86400;
    while(!FileIsEnding(file))
    {
-      datetime utc = (datetime)StringToInteger(FileReadString(file));
-      int offset = (int)StringToInteger(FileReadString(file));
+      string timestamp = FileReadString(file);
+      if(FileIsEnding(file) || FileIsLineEnding(file))
+         break; // An incomplete row must not consume the next row's timestamp.
+      string value = FileReadString(file);
+      datetime utc = (datetime)StringToInteger(timestamp);
+      long raw_offset = StringToInteger(value);
+      if(timestamp != IntegerToString((long)utc) ||
+         value != IntegerToString(raw_offset) ||
+         raw_offset < -840 || raw_offset > 840 || !FileIsLineEnding(file))
+         break;
+      int offset = (int)raw_offset;
       int count = ArraySize(g_observations);
       if(utc >= cutoff && utc <= TimeGMT() && offset >= -840 && offset <= 840 &&
         (count == 0 || utc > g_observations[count - 1].utc) &&

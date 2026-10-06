@@ -61,6 +61,8 @@ The former per-session color inputs are replaced by automatic gray/green/red col
   (default `BROKER_DST_NONE`), and `InpBrokerDSTMinutes` (default 60, range 1–120).
   The strategy tester always uses these inputs because its `TimeGMT()` equals
   simulated server time; it neither reads nor writes live observations.
+  Its default is now fixed UTC+2, rather than the previous European DST preset;
+  select the intended broker rule explicitly when comparing backtests.
   `BROKER_DST_US` switches at New York's UTC transition instants, including for
   GMT+2/+3 brokers; Australia/NZ use local transition times.
 
