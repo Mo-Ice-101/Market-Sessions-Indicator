@@ -17,9 +17,10 @@ MQL5 indicator that draws boxes around Asian, London, and NY trading sessions wi
 | London | 10:00 | 14:00 |
 | NY | 14:30 | 21:00 |
 
-Hours are **GMT+2 winter reference times**, not the current broker clock.
-The defaults preserve the previous winter schedule. Boxes and opening-time
-labels are converted automatically to broker server time for each date.
+Asian and London hours are **GMT+2 winter reference times**; NY hours are
+**UTC winter reference times**, not the current broker clock. NY's default
+14:30 represents the NYSE's 09:30 EST opening. Boxes and opening-time labels
+are converted automatically to broker server time for each date.
 Each session has separate opening/closing hour and minute and
 transparency inputs. Transparency ranges from **0 (opaque) to 100 (invisible
 fill)**; borders and labels match the block's signal color. The default is 85.
@@ -79,19 +80,27 @@ These presets model recurring rules, not a historical timezone database.
 
 Asian hours remain fixed in UTC (the default is 22:00–06:00 UTC). London
 and NY inputs retain their respective local wall-clock schedules: the defaults
-are London 08:00–12:00 local and New York 07:30–14:00 local. To customize them,
-enter the desired winter time converted to GMT+2 (London local +2 hours,
-New York local +7 hours). Each opening and closing endpoint uses its own date
+are London 08:00–12:00 local and New York 09:30–16:00 local. To customize them,
+enter the desired winter time converted to GMT+2 for London (local +2 hours)
+or UTC for New York (local +5 hours). Regional DST is applied before adding
+the broker's date-specific UTC offset; a broker with no DST still gets the
+UK/US session adjustments. Each opening and closing endpoint uses its own date
 and DST state, including overnight sessions. During spring-forward, nonexistent
 regional times move into the following hour; at fall-back the first occurrence
 is used. Intervals collapsing to zero or negative server-clock duration are skipped.
 
 For example, with detection disabled and a fixed GMT+2 broker, the summer
-defaults become Asian 00:00–08:00, London 09:00–13:00, NY 13:30–20:00.
+defaults become Asian 00:00–08:00, London 09:00–13:00, NY 15:30–22:00.
+In winter on that SAST (UTC+2, no DST) broker they are Asian 00:00–08:00,
+London 10:00–14:00, NY 16:30–23:00.
 With a GMT+2/+3 **European-rule** broker, when both regions are in DST they
-become Asian 01:00–09:00, London 10:00–14:00, NY 14:30–21:00. In the weeks
-when only the US is in DST, NY is 13:30–20:00 on that broker. History is
+become Asian 01:00–09:00, London 10:00–14:00, NY 16:30–23:00. In the weeks
+when only the US is in DST, NY is 15:30–22:00 on that broker. History is
 converted per date, never using today's DST state for all past boxes.
+
+NY inputs previously used GMT+2 winter references. The corrected conversion
+shifts existing NY inputs two hours later; to preserve a custom NY local
+schedule, subtract two hours from its old opening and closing inputs.
 
 ## Behavior
 
@@ -145,7 +154,7 @@ verification require MetaEditor/MT5.
    check that DST is reported as unverified, rather than a guessed Europe rule.
 2. Compare each box's high/low with M1 candles in `[open, close)`. Check that
    a spike in the closing minute does not affect the preceding session.
-3. Switch to M5/H1: ranges should stay the same, including NY's 14:30 start.
+3. Switch to M5/H1: ranges and converted NY opening times should stay the same.
 4. During an active session, check range expansion after a new bar or the
    next minute update, and no expansion from prices after the session close.
 5. Try transparency 0/85/100, toggle labels/time labels, and zoom, scroll,
@@ -173,12 +182,14 @@ verification require MetaEditor/MT5.
    charts; values change on every tick, including mid-candle.
 14. In the strategy tester, use a fixed GMT+2 broker (`BROKER_DST_NONE`) and
    check March 6/9/30, 2026: London opens at 10:00/10:00/09:00 and NY at
-   14:30/13:30/13:30. Check October 23/26 and November 2: London opens at
-   09:00/10:00/10:00 and NY at 13:30/13:30/14:30. Asian stays at 00:00.
+   16:30/15:30/15:30. Check October 23/26 and November 2: London opens at
+   09:00/10:00/10:00 and NY at 15:30/15:30/16:30. Asian stays at 00:00.
 15. Repeat with a GMT+2 European-rule broker: March 30 should show Asian
-   01:00, London 10:00, NY 14:30; March 9 still shows NY 13:30.
+   01:00, London 10:00, NY 16:30; March 9 still shows NY 15:30.
    With a US-rule broker on March 9, expect Asian 01:00, London 11:00,
-   NY 14:30. Keep 30 days visible across transitions to verify older boxes
+   NY 16:30. Also check a fixed UTC+3 broker: winter openings are Asian
+   01:00, London 11:00, NY 17:30; summer openings are 01:00, 10:00, 16:30.
+   Keep 30 days visible across transitions to verify older boxes
    retain the offsets for their dates after refreshing or reattaching.
 16. Disable detection and try fixed offsets -5, +5.5, +5.75, and +14.
    Verify minute offsets, date rollovers, and overnight sessions intersecting
