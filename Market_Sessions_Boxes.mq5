@@ -24,7 +24,7 @@ input group "Broker Timezone"
 input double        InpBrokerUTCOffset = 2.0; // Standard (winter) UTC offset in hours
 input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_EUROPE;
 input int           InpBrokerDSTMinutes = 60; // Broker clock advance during DST
-input bool          InpDetectBrokerOffset = true; // Detect live offset; configured base in tester
+input bool          InpDetectBrokerOffset = true; // Detect live offset for None/Europe/US rules
 
 input group "Asian Session (GMT+2 winter reference)"
 input int   InpAsianOpenHour  = 0;
@@ -157,8 +157,10 @@ int BrokerOffset(const datetime utc)
 void DetectBrokerOffset()
 {
    int base = (int)MathRound(InpBrokerUTCOffset * 60.0);
-   // In the strategy tester TimeGMT equals simulated server time, not UTC.
-   if(InpDetectBrokerOffset && !MQLInfoInteger(MQL_TESTER))
+   // Local-transition rules need a known base: the live offset is ambiguous
+   // during fall-back. In the tester TimeGMT equals simulated server time.
+   if(InpDetectBrokerOffset && InpBrokerDSTRule <= BROKER_DST_US &&
+      !MQLInfoInteger(MQL_TESTER))
    {
       datetime utc = TimeGMT();
       datetime server = TimeTradeServer();

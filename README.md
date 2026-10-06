@@ -40,7 +40,10 @@ The former per-session color inputs are replaced by automatic gray/green/red col
   to infer the standard offset. It refreshes automatically. This needs a correct
   computer clock/timezone; disable it to use `InpBrokerUTCOffset` explicitly.
   Detection is disabled in the strategy tester, where MT5's `TimeGMT()` equals
-  simulated server time; the configured base offset is used there.
+  simulated server time; the configured base offset is used there. Detection
+  is also disabled for Australia/NZ: their local transition instants require
+  a known standard offset and a single live reading is ambiguous at fall-back.
+  Set the correct `InpBrokerUTCOffset` for these presets; DST is still automatic.
 - `InpBrokerDSTRule` selects the broker's clock-change policy. The default is
   `BROKER_DST_EUROPE`. Choose **`BROKER_DST_NONE` for a fixed-offset broker**.
   `BROKER_DST_US` is for brokers switching at New York's transition instants
