@@ -22,9 +22,9 @@ enum BrokerDSTRule
 
 input group "Broker Timezone"
 input double        InpBrokerUTCOffset = 2.0; // Standard (winter) UTC offset in hours
-input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_EUROPE;
+input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_NONE; // Fallback when automatic detection is disabled
 input int           InpBrokerDSTMinutes = 60; // Broker clock advance during DST
-input bool          InpDetectBrokerOffset = true; // Detect live offset for None/Europe/US rules
+input bool          InpDetectBrokerOffset = true; // Automatically measure offset and learn broker DST
 
 input group "Asian Session (GMT+2 winter reference)"
 input int   InpAsianOpenHour  = 0;
@@ -77,7 +77,7 @@ struct SessionBox
 SessionInfo g_sessions[3];
 SessionBox  g_boxes[];
 CCanvas     g_canvas;
-string      g_prefix;
+string      g_prefix = "MSB_UNINITIALIZED_";
 long        g_chart;
 int         g_width = 0;
 int         g_height = 0;
@@ -89,6 +89,18 @@ int         g_rsi_h1 = INVALID_HANDLE;
 int         g_rsi_m15 = INVALID_HANDLE;
 int         g_rsi_m5 = INVALID_HANDLE;
 int         g_broker_base_minutes = 120;
+BrokerDSTRule g_broker_rule = BROKER_DST_NONE;
+int         g_broker_shift_minutes = 60;
+bool        g_broker_ready = false;
+bool        g_broker_verified = false;
+string      g_offset_file;
+
+struct BrokerObservation
+{
+   datetime utc;
+   int      offset;
+};
+BrokerObservation g_observations[];
 
 #define RSI_PERIOD 14
 
@@ -149,34 +161,188 @@ bool IsDST(const datetime utc, const BrokerDSTRule rule,
 
 int BrokerOffset(const datetime utc)
 {
+   if(InpDetectBrokerOffset && !MQLInfoInteger(MQL_TESTER) && !g_broker_verified)
+   {
+      // Until a rule is identified, use actual observations where available.
+      for(int i = ArraySize(g_observations) - 1; i >= 0; i--)
+        if(g_observations[i].utc <= utc)
+           return g_observations[i].offset;
+   }
    return g_broker_base_minutes +
-          (IsDST(utc, InpBrokerDSTRule, g_broker_base_minutes, InpBrokerDSTMinutes) ?
-           InpBrokerDSTMinutes : 0);
+          (IsDST(utc, g_broker_rule, g_broker_base_minutes, g_broker_shift_minutes) ?
+           g_broker_shift_minutes : 0);
+}
+
+void LoadBrokerObservations()
+{
+   // A server-specific filename avoids sharing policies between brokers.
+   string server = AccountInfoString(ACCOUNT_SERVER);
+   uint hash = 2166136261;
+   for(int i = 0; i < StringLen(server); i++)
+      hash = (hash ^ StringGetCharacter(server, i)) * 16777619;
+   g_offset_file = "MSB_Offsets_" + IntegerToString((long)hash) + ".csv";
+   int file = FileOpen(g_offset_file, FILE_READ | FILE_CSV | FILE_ANSI | FILE_SHARE_READ, ',');
+   if(file == INVALID_HANDLE)
+      return;
+   datetime cutoff = TimeGMT() - 370 * 86400;
+   while(!FileIsEnding(file))
+   {
+      string timestamp = FileReadString(file);
+      if(FileIsEnding(file) || FileIsLineEnding(file))
+         break; // An incomplete row must not consume the next row's timestamp.
+      string value = FileReadString(file);
+      datetime utc = (datetime)StringToInteger(timestamp);
+      long raw_offset = StringToInteger(value);
+      if(timestamp != IntegerToString((long)utc) ||
+         value != IntegerToString(raw_offset) ||
+         raw_offset < -840 || raw_offset > 840 || !FileIsLineEnding(file))
+         break;
+      int offset = (int)raw_offset;
+      int count = ArraySize(g_observations);
+      if(utc >= cutoff && utc <= TimeGMT() && offset >= -840 && offset <= 840 &&
+        (count == 0 || utc > g_observations[count - 1].utc) &&
+        ArrayResize(g_observations, count + 1) == count + 1)
+      {
+        g_observations[count].utc = utc;
+        g_observations[count].offset = offset;
+      }
+   }
+   FileClose(file);
+}
+
+void InferBrokerRule(const datetime now, const int current_offset)
+{
+   int minimum = current_offset, maximum = current_offset;
+   bool winter = false, summer = false;
+   for(int i = 0; i < ArraySize(g_observations); i++)
+   {
+      if(g_observations[i].utc < now - 370 * 86400)
+        continue;
+      minimum = MathMin(minimum, g_observations[i].offset);
+      maximum = MathMax(maximum, g_observations[i].offset);
+      MqlDateTime date;
+      TimeToStruct(g_observations[i].utc, date);
+      winter = winter || date.mon == 1;
+      summer = summer || date.mon == 7;
+   }
+   g_broker_rule = BROKER_DST_NONE;
+   g_broker_base_minutes = current_offset;
+   g_broker_verified = (minimum == maximum && winter && summer);
+   int shift = maximum - minimum;
+   if(shift < 1 || shift > 120)
+      return;
+
+   int matches = 0;
+   BrokerDSTRule selected = BROKER_DST_NONE;
+   for(int candidate = BROKER_DST_EUROPE; candidate <= BROKER_DST_NZ; candidate++)
+   {
+      BrokerDSTRule rule = (BrokerDSTRule)candidate;
+      bool fits = current_offset == minimum +
+        (IsDST(now, rule, minimum, shift) ? shift : 0);
+      for(int i = 0; i < ArraySize(g_observations) && fits; i++)
+      {
+        if(g_observations[i].utc < now - 370 * 86400)
+           continue;
+        int expected = minimum +
+           (IsDST(g_observations[i].utc, rule, minimum, shift) ? shift : 0);
+        fits = (expected == g_observations[i].offset);
+      }
+      if(fits)
+      {
+        matches++;
+        selected = rule;
+      }
+   }
+   // Winter/summer alone cannot distinguish Europe from US transition dates.
+   if(matches == 1)
+   {
+      g_broker_rule = selected;
+      g_broker_base_minutes = minimum;
+      g_broker_shift_minutes = shift;
+      g_broker_verified = true;
+   }
 }
 
 void DetectBrokerOffset()
 {
-   int base = (int)MathRound(InpBrokerUTCOffset * 60.0);
-   // Local-transition rules need a known base: the live offset is ambiguous
-   // during fall-back. In the tester TimeGMT equals simulated server time.
-   if(InpDetectBrokerOffset && InpBrokerDSTRule <= BROKER_DST_US &&
-      !MQLInfoInteger(MQL_TESTER))
+   int previous_base = g_broker_base_minutes;
+   BrokerDSTRule previous_rule = g_broker_rule;
+   int previous_shift = g_broker_shift_minutes;
+   if(!InpDetectBrokerOffset || MQLInfoInteger(MQL_TESTER))
+   {
+      g_broker_base_minutes = (int)MathRound(InpBrokerUTCOffset * 60.0);
+      g_broker_rule = InpBrokerDSTRule;
+      g_broker_shift_minutes = InpBrokerDSTMinutes;
+      g_broker_ready = true;
+   }
+   else
    {
       datetime utc = TimeGMT();
       datetime server = TimeTradeServer();
-      if(utc > 0 && server > 0)
+      // Do not learn from a disconnected terminal or stale weekend quotes.
+      if(!TerminalInfoInteger(TERMINAL_CONNECTED) || utc <= 0 || server <= 0 ||
+        MathAbs((double)(server - TimeCurrent())) > 180)
+        return;
+      int offset = (int)MathRound((double)(server - utc) / 60.0);
+      if(offset < -840 || offset > 840)
+        return;
+      int count = ArraySize(g_observations);
+      if(count == 0 || (utc > g_observations[count - 1].utc &&
+        (utc / 86400 != g_observations[count - 1].utc / 86400 ||
+         offset != g_observations[count - 1].offset)))
       {
-         int offset = (int)MathRound((double)(server - utc) / 60.0);
-         int detected_base = offset -
-            (IsDST(utc, InpBrokerDSTRule, base, InpBrokerDSTMinutes) ?
-             InpBrokerDSTMinutes : 0);
-         if(detected_base >= -14 * 60 && detected_base <= 14 * 60)
-            base = detected_base;
+        if(ArrayResize(g_observations, count + 1) == count + 1)
+        {
+           g_observations[count].utc = utc;
+           g_observations[count].offset = offset;
+           int file = FileOpen(g_offset_file, FILE_READ | FILE_WRITE | FILE_CSV |
+                               FILE_ANSI | FILE_SHARE_READ, ',');
+           if(file != INVALID_HANDLE)
+           {
+              FileSeek(file, 0, SEEK_END);
+              FileWrite(file, (long)utc, offset);
+              FileClose(file);
+           }
+        }
       }
+      InferBrokerRule(utc, offset);
+      g_broker_ready = true;
    }
-   if(base != g_broker_base_minutes)
+   if(previous_base != g_broker_base_minutes || previous_rule != g_broker_rule ||
+      previous_shift != g_broker_shift_minutes)
       g_day = 0; // Rebuild object keys if the detected timezone changes.
-   g_broker_base_minutes = base;
+}
+
+void DrawBrokerTimezone()
+{
+   string name = g_prefix + "Timezone_Label";
+   if(ObjectFind(g_chart, name) < 0)
+   {
+      if(!ObjectCreate(g_chart, name, OBJ_LABEL, 0, 0, 0))
+        return;
+      ObjectSetInteger(g_chart, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+      ObjectSetInteger(g_chart, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+      ObjectSetInteger(g_chart, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(g_chart, name, OBJPROP_YDISTANCE, 40);
+      ObjectSetInteger(g_chart, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
+   }
+   string text = "Broker timezone: waiting for live quotes";
+   if(g_broker_ready)
+   {
+      bool automatic = InpDetectBrokerOffset && !MQLInfoInteger(MQL_TESTER);
+      int offset = BrokerOffset(automatic ? TimeGMT() : TimeCurrent());
+      string rules[] = {"None", "Europe", "US", "Australia", "NZ"};
+      text = StringFormat("Broker UTC%s%02d:%02d | DST: %s%s",
+                         offset < 0 ? "-" : "+", (int)MathAbs(offset) / 60,
+                         (int)MathAbs(offset) % 60,
+                         automatic && !g_broker_verified ? "unverified" : rules[(int)g_broker_rule],
+                         automatic ? " (auto)" : " (manual/tester)");
+   }
+   ObjectSetInteger(g_chart, name, OBJPROP_COLOR,
+                   ChartGetInteger(g_chart, CHART_COLOR_FOREGROUND));
+   ObjectSetString(g_chart, name, OBJPROP_TEXT, text);
 }
 
 datetime SessionServerTime(const datetime reference, const int session)
@@ -220,6 +386,7 @@ bool ConfigureSession(const int index, const string name,
 
 int OnInit()
 {
+   g_chart = ChartID();
    if(!MathIsValidNumber(InpBrokerUTCOffset) ||
       InpBrokerUTCOffset < -14.0 || InpBrokerUTCOffset > 14.0 ||
       InpBrokerDSTMinutes < 1 || InpBrokerDSTMinutes > 120 ||
@@ -242,14 +409,13 @@ int OnInit()
                         InpNYCloseHour, InpNYCloseMin, InpNYTransp))
       return INIT_PARAMETERS_INCORRECT;
 
-   g_chart = ChartID();
    // Reserve a chart-local namespace so multiple copies never delete each other.
    int instance = 0;
    do
    {
       g_prefix = "MSB_" + IntegerToString(instance++) + "_";
    }
-   while(ObjectFind(g_chart, g_prefix + "Canvas") >= 0);
+   while(InstanceObjectsExist(g_prefix));
 
    g_width = (int)ChartGetInteger(g_chart, CHART_WIDTH_IN_PIXELS);
    g_height = (int)ChartGetInteger(g_chart, CHART_HEIGHT_IN_PIXELS, 0);
@@ -276,6 +442,8 @@ int OnInit()
       Print("Unable to initialize session updates. Error: ", GetLastError());
       return INIT_FAILED;
    }
+   if(InpDetectBrokerOffset && !MQLInfoInteger(MQL_TESTER))
+      LoadBrokerObservations();
    UpdateSessions();
    return INIT_SUCCEEDED;
 }
@@ -290,14 +458,24 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_rsi_m15);
    if(g_rsi_m5 != INVALID_HANDLE)
       IndicatorRelease(g_rsi_m5);
-   // An empty prefix would delete unrelated objects after invalid inputs.
-   // Removes boxes, labels, confirmation arrows and the RSI label of this instance.
    if(g_prefix != "")
    {
+      ObjectsDeleteAll(g_chart, g_prefix + "Box_");
+      ObjectsDeleteAll(g_chart, g_prefix + "Label_");
       ObjectsDeleteAll(g_chart, g_prefix + "ConfirmArrow_");
-      ObjectsDeleteAll(g_chart, g_prefix);
+      ObjectDelete(g_chart, g_prefix + "RSI_Label");
+      ObjectDelete(g_chart, g_prefix + "Timezone_Label");
+      ObjectDelete(g_chart, g_prefix + "Canvas");
    }
    ChartRedraw(g_chart);
+}
+
+bool InstanceObjectsExist(const string prefix)
+{
+   for(int i = ObjectsTotal(g_chart) - 1; i >= 0; i--)
+      if(StringFind(ObjectName(g_chart, i), prefix) == 0)
+         return true;
+   return false;
 }
 
 int OnCalculate(const int rates_total, const int prev_calculated,
@@ -423,10 +601,11 @@ void ConfirmBreak(SessionBox &box, const datetime now)
 //+------------------------------------------------------------------+
 void UpdateSessions()
 {
-   datetime now = TimeCurrent(); // Broker's latest quote time, not local/UTC time
-   if(now <= 0)
-      return;
    DetectBrokerOffset();
+   DrawBrokerTimezone();
+   datetime now = TimeCurrent(); // Broker's latest quote time, not local/UTC time
+   if(now <= 0 || !g_broker_ready)
+      return;
    MqlDateTime date;
    if(!TimeToStruct(now, date))
       return;
