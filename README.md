@@ -44,7 +44,8 @@ The former per-session color inputs are replaced by automatic gray/green/red col
   Changed offsets are compared against Europe, US, Australia and NZ rules; a
   rule is selected only when exactly one matches all recent observations.
   The observed clock advance is detected too.
-- A label below the RSI shows the broker's current UTC offset and DST policy.
+- A separate label below the RSI shows the broker's current UTC offset and DST
+  policy, with spacing based on the RSI text height and display scaling.
   **DST: unverified** means there is insufficient or ambiguous evidence. The
   current offset is used provisionally, with recorded offsets used for earlier
   observed dates. Dates before the first observation use the current offset.
@@ -181,7 +182,9 @@ verification require MetaEditor/MT5.
    whose close first left the range: up arrow under green breaks, down arrow
    over red breaks.
 13. Compare the RSI label with standard RSI(14) indicators on H1, M15 and M5
-   charts; values change on every tick, including mid-candle.
+   charts; values change on every tick, including mid-candle. Check that the
+   broker offset and DST status occupy a separate line below the RSI without
+   overlap, including at higher display scaling and after resizing the chart.
 14. In the strategy tester, use a fixed GMT+2 broker (`BROKER_DST_NONE`) and
    check March 6/9/30, 2026: London opens at 10:00/10:00/09:00 and NY at
    16:30/15:30/15:30. Check October 23/26 and November 2: London opens at
@@ -189,6 +192,12 @@ verification require MetaEditor/MT5.
    For NY transition boundaries on that fixed UTC+2 broker, use custom inputs:
    March 8 at 06:59/07:00 UTC winter reference must convert to 08:59/08:00;
    November 1 at 05:59/06:00 must convert to 06:59/08:00.
+   With time labels enabled, verify each label matches its rectangle's opening
+   timestamp in the Objects List: summer NY must show `NY 15:30` on fixed UTC+2,
+   and winter NY `NY 16:30`. Edit an existing NY label's text to an incorrect
+   time, then wait for the next session update: it must restore the box's time.
+   Check that London/Asian names and times still match their box openings;
+   disabling time labels must leave only the session names.
 15. Repeat with a GMT+2 European-rule broker: March 30 should show Asian
    01:00, London 10:00, NY 16:30; March 9 still shows NY 15:30.
    With a US-rule broker on March 9, expect Asian 01:00, London 11:00,
