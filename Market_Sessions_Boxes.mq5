@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //| Market Sessions Boxes                                            |
 //| Install in MQL5/Indicators and compile with MetaEditor (MT5).      |
-//| Inputs use GMT+2 winter times; boxes use the broker's clock.      |
+//| Asian/London use GMT+2 winter times; NY uses UTC winter times.    |
 //| London, New York and broker DST are calculated for each date.     |
 //+------------------------------------------------------------------+
 #property version   "1.01"
@@ -40,7 +40,7 @@ input int   InpLondonCloseHour = 14;
 input int   InpLondonCloseMin  = 0;
 input int   InpLondonTransp   = 85;
 
-input group "NY Session (GMT+2 winter reference)"
+input group "NY Session (UTC winter reference)"
 input int   InpNYOpenHour  = 14;
 input int   InpNYOpenMin   = 30;
 input int   InpNYCloseHour = 21;
@@ -347,7 +347,8 @@ void DrawBrokerTimezone()
 
 datetime SessionServerTime(const datetime reference, const int session)
 {
-   datetime utc = reference - 2 * 3600;
+   // NY uses UTC winter hours; Asian/London retain their GMT+2 reference.
+   datetime utc = reference - (session == 2 ? 0 : 2 * 3600);
    if(session != 0)
    {
       BrokerDSTRule rule = (session == 1 ? BROKER_DST_EUROPE : BROKER_DST_US);
