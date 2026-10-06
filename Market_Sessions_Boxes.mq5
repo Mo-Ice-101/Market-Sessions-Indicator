@@ -323,11 +323,15 @@ void DrawBrokerTimezone()
       ObjectSetInteger(g_chart, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
       ObjectSetInteger(g_chart, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
       ObjectSetInteger(g_chart, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(g_chart, name, OBJPROP_YDISTANCE, 40);
       ObjectSetInteger(g_chart, name, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
    }
+   string rsi = g_prefix + "RSI_Label";
+   int font_height = (int)MathCeil(10.0 * TerminalInfoInteger(TERMINAL_SCREEN_DPI) / 72.0);
+   int rsi_height = MathMax(font_height, (int)ObjectGetInteger(g_chart, rsi, OBJPROP_YSIZE));
+   ObjectSetInteger(g_chart, name, OBJPROP_YDISTANCE,
+                    ObjectGetInteger(g_chart, rsi, OBJPROP_YDISTANCE) + rsi_height + 8);
    string text = "Broker timezone: waiting for live quotes";
    if(g_broker_ready)
    {
@@ -607,7 +611,7 @@ void ConfirmBreak(SessionBox &box, const datetime now)
 void UpdateSessions()
 {
    DetectBrokerOffset();
-   DrawBrokerTimezone();
+   DrawRSILevels();
    datetime now = TimeCurrent(); // Broker's latest quote time, not local/UTC time
    if(now <= 0 || !g_broker_ready)
       return;
@@ -699,7 +703,6 @@ void UpdateSessions()
       }
    }
    g_last_update = now;
-   DrawRSILevels();
    RenderFills();
 }
 
@@ -776,6 +779,7 @@ void DrawRSILevels()
                    "H1 RSI: " + RSIText(g_rsi_h1) +
                    " | M15 RSI: " + RSIText(g_rsi_m15) +
                    " | M5 RSI: " + RSIText(g_rsi_m5));
+   DrawBrokerTimezone();
 }
 
 void DrawObjects(const string key, const int session,
@@ -814,11 +818,12 @@ void DrawObjects(const string key, const int session,
       ObjectSetInteger(g_chart, label, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(g_chart, label, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(g_chart, label, OBJPROP_HIDDEN, true);
-      string text = g_sessions[session].name;
-      if(InpShowTimeLabels)
-         text += " " + TimeToString(start, TIME_MINUTES);
-      ObjectSetString(g_chart, label, OBJPROP_TEXT, text);
    }
+   string text = g_sessions[session].name;
+   if(InpShowTimeLabels)
+      text += " " + TimeToString((datetime)ObjectGetInteger(g_chart, box, OBJPROP_TIME, 0),
+                                 TIME_MINUTES);
+   ObjectSetString(g_chart, label, OBJPROP_TEXT, text);
    ObjectSetInteger(g_chart, label, OBJPROP_COLOR, box_color);
    ObjectMove(g_chart, label, 0, start, highest);
 }
