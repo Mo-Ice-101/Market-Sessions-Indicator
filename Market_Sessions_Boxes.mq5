@@ -1,31 +1,46 @@
 //+------------------------------------------------------------------+
 //| Market Sessions Boxes                                            |
 //| Install in MQL5/Indicators and compile with MetaEditor (MT5).      |
-//| Times use the broker's server clock, assumed GMT+2 by default.    |
-//| No UTC conversion or automatic daylight-saving adjustment occurs.|
+//| Inputs use GMT+2 winter times; boxes use the broker's clock.      |
+//| London, New York and broker DST are calculated for each date.     |
 //+------------------------------------------------------------------+
-#property version   "1.00"
+#property version   "1.01"
 #property description "Asian, London and NY session ranges in broker server time."
 #property indicator_chart_window
 #property indicator_plots 0
 
 #include <Canvas/Canvas.mqh>
 
-input group "Asian Session (server time)"
+enum BrokerDSTRule
+{
+   BROKER_DST_NONE,      // No daylight saving
+   BROKER_DST_EUROPE,    // Last Sunday March/October, 01:00 UTC
+   BROKER_DST_US,        // US Eastern: second Sunday March/first Sunday November
+   BROKER_DST_AUSTRALIA, // First Sunday October/April, local 02:00/03:00
+   BROKER_DST_NZ        // Last Sunday September/first Sunday April, local 02:00/03:00
+};
+
+input group "Broker Timezone"
+input double        InpBrokerUTCOffset = 2.0; // Standard (winter) UTC offset in hours
+input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_EUROPE;
+input int           InpBrokerDSTMinutes = 60; // Broker clock advance during DST
+input bool          InpDetectBrokerOffset = true; // Detect live offset; configured base in tester
+
+input group "Asian Session (GMT+2 winter reference)"
 input int   InpAsianOpenHour  = 0;
 input int   InpAsianOpenMin   = 0;
 input int   InpAsianCloseHour = 8;
 input int   InpAsianCloseMin  = 0;
 input int   InpAsianTransp   = 85; // Transparency: 0 = opaque, 100 = invisible fill
 
-input group "London Session (server time)"
+input group "London Session (GMT+2 winter reference)"
 input int   InpLondonOpenHour  = 10;
 input int   InpLondonOpenMin   = 0;
 input int   InpLondonCloseHour = 14;
 input int   InpLondonCloseMin  = 0;
 input int   InpLondonTransp   = 85;
 
-input group "NY Session (server time)"
+input group "NY Session (GMT+2 winter reference)"
 input int   InpNYOpenHour  = 14;
 input int   InpNYOpenMin   = 30;
 input int   InpNYCloseHour = 21;
@@ -73,8 +88,108 @@ datetime    g_last_bar = 0;
 int         g_rsi_h1 = INVALID_HANDLE;
 int         g_rsi_m15 = INVALID_HANDLE;
 int         g_rsi_m5 = INVALID_HANDLE;
+int         g_broker_base_minutes = 120;
 
 #define RSI_PERIOD 14
+
+//+------------------------------------------------------------------+
+//| Calendar rules use UTC instants, independent of the PC timezone.  |
+//| occurrence = 0 selects the last Sunday, otherwise the nth Sunday. |
+//+------------------------------------------------------------------+
+datetime TransitionSunday(const int year, const int month,
+                          const int occurrence, const int hour)
+{
+   MqlDateTime date = {};
+   date.year = year;
+   date.mon = (occurrence == 0 ? month + 1 : month);
+   date.day = 1;
+   if(date.mon == 13)
+   {
+      date.mon = 1;
+      date.year++;
+   }
+   datetime day = StructToTime(date);
+   if(occurrence == 0)
+      day -= 86400;
+   TimeToStruct(day, date);
+   int delta = (occurrence == 0 ? -date.day_of_week :
+                (7 - date.day_of_week) % 7 + (occurrence - 1) * 7);
+   return day + delta * 86400 + hour * 3600;
+}
+
+bool IsDST(const datetime utc, const BrokerDSTRule rule,
+           const int base_minutes, const int shift_minutes)
+{
+   if(rule == BROKER_DST_NONE)
+      return false;
+   MqlDateTime date;
+   TimeToStruct(utc, date);
+   datetime start, end;
+   if(rule == BROKER_DST_EUROPE)
+   {
+      start = TransitionSunday(date.year, 3, 0, 1);
+      end = TransitionSunday(date.year, 10, 0, 1);
+   }
+   else if(rule == BROKER_DST_US)
+   {
+      // Brokers using US dates commonly switch at the New York UTC instants.
+      start = TransitionSunday(date.year, 3, 2, 7);
+      end = TransitionSunday(date.year, 11, 1, 6);
+   }
+   else
+   {
+      start = TransitionSunday(date.year, rule == BROKER_DST_NZ ? 9 : 10,
+                               rule == BROKER_DST_NZ ? 0 : 1, 2) - base_minutes * 60;
+      end = TransitionSunday(date.year, 4, 1, 3) -
+            (base_minutes + shift_minutes) * 60;
+      return utc >= start || utc < end;
+   }
+   return utc >= start && utc < end;
+}
+
+int BrokerOffset(const datetime utc)
+{
+   return g_broker_base_minutes +
+          (IsDST(utc, InpBrokerDSTRule, g_broker_base_minutes, InpBrokerDSTMinutes) ?
+           InpBrokerDSTMinutes : 0);
+}
+
+void DetectBrokerOffset()
+{
+   int base = (int)MathRound(InpBrokerUTCOffset * 60.0);
+   // In the strategy tester TimeGMT equals simulated server time, not UTC.
+   if(InpDetectBrokerOffset && !MQLInfoInteger(MQL_TESTER))
+   {
+      datetime utc = TimeGMT();
+      datetime server = TimeTradeServer();
+      if(utc > 0 && server > 0)
+      {
+         int offset = (int)MathRound((double)(server - utc) / 60.0);
+         int detected_base = offset -
+            (IsDST(utc, InpBrokerDSTRule, base, InpBrokerDSTMinutes) ?
+             InpBrokerDSTMinutes : 0);
+         if(detected_base >= -14 * 60 && detected_base <= 14 * 60)
+            base = detected_base;
+      }
+   }
+   if(base != g_broker_base_minutes)
+      g_day = 0; // Rebuild object keys if the detected timezone changes.
+   g_broker_base_minutes = base;
+}
+
+datetime SessionServerTime(const datetime reference, const int session)
+{
+   datetime utc = reference - 2 * 3600;
+   if(session != 0)
+   {
+      BrokerDSTRule rule = (session == 1 ? BROKER_DST_EUROPE : BROKER_DST_US);
+      // Resolve local wall time: first occurrence at fall-back; normalize
+      // nonexistent spring-forward times into the following hour.
+      if(IsDST(utc - 3600, rule, 0, 60))
+         utc -= 3600;
+   }
+   return utc + BrokerOffset(utc) * 60;
+}
 
 //+------------------------------------------------------------------+
 //| Reject invalid inputs rather than silently changing session times.|
@@ -103,6 +218,15 @@ bool ConfigureSession(const int index, const string name,
 
 int OnInit()
 {
+   if(!MathIsValidNumber(InpBrokerUTCOffset) ||
+      InpBrokerUTCOffset < -14.0 || InpBrokerUTCOffset > 14.0 ||
+      InpBrokerDSTMinutes < 1 || InpBrokerDSTMinutes > 120 ||
+      InpBrokerDSTRule < BROKER_DST_NONE || InpBrokerDSTRule > BROKER_DST_NZ)
+   {
+      Print("Broker UTC offset must be -14 to +14 hours, DST advance 1-120 minutes, ",
+            "and a supported DST rule is required.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
    if(InpDaysToShow < 1 || InpDaysToShow > 30 || InpBoxWidth < 1 || InpBoxWidth > 5)
    {
       Print("Days to show must be 1-30 and border width must be 1-5.");
@@ -145,7 +269,7 @@ int OnInit()
       Print("Unable to create RSI handles. Error: ", GetLastError());
    g_canvas.Erase(0);
    g_canvas.Update(false);
-   if(ArrayResize(g_boxes, (InpDaysToShow + 1) * 3) < 0 || !EventSetTimer(60))
+   if(ArrayResize(g_boxes, (InpDaysToShow + 3) * 3) < 0 || !EventSetTimer(60))
    {
       Print("Unable to initialize session updates. Error: ", GetLastError());
       return INIT_FAILED;
@@ -293,13 +417,14 @@ void ConfirmBreak(SessionBox &box, const datetime now)
 
 //+------------------------------------------------------------------+
 //| Keep date-specific objects in place, avoiding delete/create flicker.|
-//| The extra previous day retains overnight sessions on the first day.|
+//| Extra reference dates cover timezone shifts and overnight sessions.|
 //+------------------------------------------------------------------+
 void UpdateSessions()
 {
    datetime now = TimeCurrent(); // Broker's latest quote time, not local/UTC time
    if(now <= 0)
       return;
+   DetectBrokerOffset();
    MqlDateTime date;
    if(!TimeToStruct(now, date))
       return;
@@ -321,16 +446,18 @@ void UpdateSessions()
       ArrayCopy(previous_boxes, g_boxes, 0, 0, previous_count);
    g_box_count = 0;
    datetime oldest = today - (InpDaysToShow - 1) * 86400;
-   for(int day = InpDaysToShow; day >= 0; day--)
+   for(int day = InpDaysToShow + 1; day >= -1; day--)
    {
       datetime midnight = today - day * 86400;
       for(int s = 0; s < 3; s++)
       {
-         datetime start = midnight + g_sessions[s].open_minutes * 60;
-         datetime end = midnight + g_sessions[s].close_minutes * 60;
-         if(end < start)
-            end += 86400;
-         if(end <= oldest)
+         datetime reference_start = midnight + g_sessions[s].open_minutes * 60;
+         datetime reference_end = midnight + g_sessions[s].close_minutes * 60;
+         if(reference_end < reference_start)
+            reference_end += 86400;
+         datetime start = SessionServerTime(reference_start, s);
+         datetime end = SessionServerTime(reference_end, s);
+         if(end <= oldest || start > now || end <= start)
             continue;
          string key = IntegerToString(s) + "_" + IntegerToString((long)start);
          SessionBox box;
@@ -347,7 +474,8 @@ void UpdateSessions()
          // Check if box exists in previous state and restore it
          for(int i = 0; i < previous_count; i++)
          {
-            if(previous_boxes[i].session == s && previous_boxes[i].open_time == start)
+            if(previous_boxes[i].session == s && previous_boxes[i].open_time == start &&
+               previous_boxes[i].close_time == end)
             {
                box = previous_boxes[i];
                break;
