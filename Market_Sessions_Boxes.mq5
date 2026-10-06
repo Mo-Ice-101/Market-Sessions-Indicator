@@ -353,9 +353,12 @@ datetime SessionServerTime(const datetime reference, const int session)
 {
    // NY uses UTC winter hours; Asian/London retain their GMT+2 reference.
    datetime utc = reference - (session == 2 ? 0 : 2 * 3600);
+   datetime utc_after_gmt2 = utc;
+   bool ny_dst = false;
    if(session == 2)
    {
-      if(IsDST(utc, BROKER_DST_US, 0, 60))
+      ny_dst = IsDST(utc, BROKER_DST_US, 0, 60);
+      if(ny_dst)
          utc -= 3600;
    }
    else if(session == 1)
@@ -364,6 +367,27 @@ datetime SessionServerTime(const datetime reference, const int session)
       // nonexistent spring-forward times into the following hour.
       if(IsDST(utc - 3600, BROKER_DST_EUROPE, 0, 60))
          utc -= 3600;
+   }
+   if(session == 2)
+   {
+      int broker_offset = BrokerOffset(utc);
+      datetime actual = utc + broker_offset * 60;
+      datetime expected = reference - (ny_dst ? 3600 : 0) + broker_offset * 60;
+      datetime expected_sast = reference - (ny_dst ? 3600 : 0) + 2 * 3600;
+      Print("NY DEBUG: Input ref=", TimeToString(reference, TIME_DATE | TIME_SECONDS),
+            ", UTC after GMT2=", TimeToString(utc_after_gmt2, TIME_DATE | TIME_SECONDS),
+            ", IsDST=", ny_dst ? "true" : "false",
+            ", DST subtraction=", ny_dst ? "3600 seconds" : "0 seconds",
+            ", After DST adj=", TimeToString(utc, TIME_DATE | TIME_SECONDS),
+            ", Final UTC before broker=", TimeToString(utc, TIME_DATE | TIME_SECONDS),
+            ", Broker offset=", broker_offset, " minutes (", broker_offset * 60, " seconds)",
+            ", Final=", TimeToString(actual, TIME_DATE | TIME_SECONDS));
+      Print("NY DEBUG: Expected (ref - US DST + broker)=",
+            TimeToString(expected, TIME_DATE | TIME_SECONDS),
+            ", Actual=", TimeToString(actual, TIME_DATE | TIME_SECONDS),
+            ", Difference=", (long)actual - (long)expected, " seconds",
+            ", Expected SAST (fixed UTC+2)=",
+            TimeToString(expected_sast, TIME_DATE | TIME_SECONDS));
    }
    return utc + BrokerOffset(utc) * 60;
 }
@@ -613,6 +637,8 @@ void UpdateSessions()
    DetectBrokerOffset();
    DrawRSILevels();
    datetime now = TimeCurrent(); // Broker's latest quote time, not local/UTC time
+   Print("NY DEBUG: UpdateSessions at ", TimeToString(now, TIME_DATE | TIME_SECONDS),
+         ", Broker ready=", g_broker_ready ? "true" : "false");
    if(now <= 0 || !g_broker_ready)
       return;
    MqlDateTime date;
@@ -647,6 +673,13 @@ void UpdateSessions()
             reference_end += 86400;
          datetime start = SessionServerTime(reference_start, s);
          datetime end = SessionServerTime(reference_end, s);
+         if(s == 2)
+            Print("NY DEBUG: UpdateSessions at ", TimeToString(now, TIME_DATE | TIME_SECONDS),
+                  ", Open ref=", TimeToString(reference_start, TIME_DATE | TIME_SECONDS),
+                  ", Close ref=", TimeToString(reference_end, TIME_DATE | TIME_SECONDS),
+                  ", Calculated open=", TimeToString(start, TIME_DATE | TIME_SECONDS),
+                  ", Calculated close=", TimeToString(end, TIME_DATE | TIME_SECONDS),
+                  ", Opening label=", TimeToString(start, TIME_MINUTES));
          if(end <= oldest || start > now || end <= start)
             continue;
          string key = IntegerToString(s) + "_" + IntegerToString((long)start);

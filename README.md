@@ -148,6 +148,25 @@ and timezone label, including after partial initialization failures.
 
 ## Manual verification (MetaTrader 5)
 
+### NY debug logging
+
+The **Experts** tab contains `NY DEBUG:` messages on every `UpdateSessions()`
+call and every NY opening/closing conversion, including reference dates that
+are later skipped for rendering. Each conversion logs the dated input,
+UTC after the GMT+2 step (no subtraction for NY), US DST status, the
+0/3600-second DST subtraction, UTC before the broker offset, the offset in
+minutes/seconds, and final server time. Update messages identify opening and
+closing references, converted times, and the opening-label time.
+
+`Expected (ref - US DST + broker)` checks the arithmetic using the reported
+DST state and broker offset; it does not independently verify their correctness.
+`Expected SAST (fixed UTC+2)` is a separate comparison, not an assumption about
+the broker. For a summer 14:30 reference, expect UTC 13:30 and SAST 15:30;
+a broker offset of 180 minutes legitimately produces server time 16:30.
+In winter, expect UTC 14:30 and SAST 16:30. Check both endpoints, overnight
+date rollovers, and the DST boundary dates below. Logs are unconditional and
+can be verbose across the configured history window; calculations are unchanged.
+
 This repository has no automated test infrastructure. Compilation and visual
 verification require MetaEditor/MT5.
 
