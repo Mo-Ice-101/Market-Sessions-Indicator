@@ -85,9 +85,11 @@ enter the desired winter time converted to GMT+2 for London (local +2 hours)
 or UTC for New York (local +5 hours). Regional DST is applied before adding
 the broker's date-specific UTC offset; a broker with no DST still gets the
 UK/US session adjustments. Each opening and closing endpoint uses its own date
-and DST state, including overnight sessions. During spring-forward, nonexistent
-regional times move into the following hour; at fall-back the first occurrence
-is used. Intervals collapsing to zero or negative server-clock duration are skipped.
+and DST state, including overnight sessions. NY checks US DST at its UTC winter
+reference, subtracts one hour when active, then applies the broker offset.
+London's nonexistent spring-forward times move into the following hour; at
+fall-back the first occurrence is used. Intervals collapsing to zero or negative
+server-clock duration are skipped.
 
 For example, with detection disabled and a fixed GMT+2 broker, the summer
 defaults become Asian 00:00–08:00, London 09:00–13:00, NY 15:30–22:00.
@@ -184,6 +186,9 @@ verification require MetaEditor/MT5.
    check March 6/9/30, 2026: London opens at 10:00/10:00/09:00 and NY at
    16:30/15:30/15:30. Check October 23/26 and November 2: London opens at
    09:00/10:00/10:00 and NY at 15:30/15:30/16:30. Asian stays at 00:00.
+   For NY transition boundaries on that fixed UTC+2 broker, use custom inputs:
+   March 8 at 06:59/07:00 UTC winter reference must convert to 08:59/08:00;
+   November 1 at 05:59/06:00 must convert to 06:59/08:00.
 15. Repeat with a GMT+2 European-rule broker: March 30 should show Asian
    01:00, London 10:00, NY 16:30; March 9 still shows NY 15:30.
    With a US-rule broker on March 9, expect Asian 01:00, London 11:00,

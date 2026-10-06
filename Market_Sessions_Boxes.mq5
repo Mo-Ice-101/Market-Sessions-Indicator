@@ -349,12 +349,16 @@ datetime SessionServerTime(const datetime reference, const int session)
 {
    // NY uses UTC winter hours; Asian/London retain their GMT+2 reference.
    datetime utc = reference - (session == 2 ? 0 : 2 * 3600);
-   if(session != 0)
+   if(session == 2)
    {
-      BrokerDSTRule rule = (session == 1 ? BROKER_DST_EUROPE : BROKER_DST_US);
+      if(IsDST(utc, BROKER_DST_US, 0, 60))
+         utc -= 3600;
+   }
+   else if(session == 1)
+   {
       // Resolve local wall time: first occurrence at fall-back; normalize
       // nonexistent spring-forward times into the following hour.
-      if(IsDST(utc - 3600, rule, 0, 60))
+      if(IsDST(utc - 3600, BROKER_DST_EUROPE, 0, 60))
          utc -= 3600;
    }
    return utc + BrokerOffset(utc) * 60;
