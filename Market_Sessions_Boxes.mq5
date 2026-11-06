@@ -44,6 +44,7 @@ input bool InpShowLabels     = true; // Show session names
 input bool InpShowTimeLabels = true; // Append opening time to session labels
 input int  InpBoxWidth       = 1;    // Border width: 1-5 pixels
 input int  InpDaysToShow     = 5;    // Calendar days including today: 1-30
+input string InpInstanceName = ""; // Optional unique name for EA-owned chart attachment
 
 struct SessionInfo
 {
@@ -350,6 +351,12 @@ bool ConfigureSession(const int index, const string name,
 int OnInit()
 {
    g_chart = ChartID();
+   if(!IndicatorSetString(INDICATOR_SHORTNAME,
+                         InpInstanceName == "" ? "Market Sessions Boxes" : InpInstanceName))
+   {
+      Print("Unable to set indicator name. Error: ", GetLastError());
+      return INIT_FAILED;
+   }
    if(!MathIsValidNumber(InpBrokerUTCOffset) ||
       InpBrokerUTCOffset < -14.0 || InpBrokerUTCOffset > 14.0 ||
       InpBrokerDSTMinutes < 1 || InpBrokerDSTMinutes > 120 ||

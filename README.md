@@ -15,8 +15,21 @@ levels to the next session, and a two-entry hedging-account EA.
 
 `Market_Sessions_EA.mq5` is a separate trading EA; the indicator remains available.
 Both use `Market_Sessions_Core.mqh` for regional DST, opening M15 ranges and M5 breakout
-confirmation. The EA does not require the indicator on the chart and does not
-draw session boxes. Attach the indicator separately for visualization.
+confirmation. With `InpShowSessionBoxes=true` (default), the EA automatically
+attaches a uniquely named copy of the indicator to its live/visual-tester chart.
+It passes its broker timezone, session times and history settings, with automatic
+offset detection off, so visuals match EA signals. All three sessions are drawn,
+even if their trading entry switches are off. `InpBoxTransparency` defaults to
+85 (range 0-100). Boxes, levels, arrows, RSI and timezone labels remain visible
+when `InpEnableEA=false`. No drawing indicator is loaded in nonvisual backtests.
+
+Compile **both** source files after syncing. The compiled
+`MQL5/Indicators/Market_Sessions_Boxes.ex5` is required when chart visuals are
+enabled; a missing indicator produces an initialization error rather than
+silently running without boxes. Set `InpShowSessionBoxes=false` only if you
+deliberately want no automatic visuals or already attach an indicator manually.
+Removing/reconfiguring the EA removes only its own indicator instance, not
+manually attached copies.
 
 Copy the EA and `Market_Sessions_Core.mqh` together into `MQL5/Experts`, then
 compile the EA with F7. Run it in Strategy Tester and on a demo account before
@@ -157,6 +170,11 @@ Use **Every tick based on real ticks** in Strategy Tester where available:
    With `InpEnableEA=false`, verify no new entries, pending midpoint
    cancellation and continued management of existing trades. Re-enable and
    verify disabled-period signals are not replayed.
+   Attach the EA alone with `InpShowSessionBoxes=true`: verify historical and
+   live boxes, matching timezone/inputs, no boxes before the opening M15 closes,
+   and visible levels in visual testing. Verify missing compiled indicator
+   errors, disabled-entry visuals, and that EA removal leaves manually attached
+   indicators intact. Nonvisual testing should not load drawing resources.
 4. On a demo hedging account, restart before and after each entry's half-close,
    including after a stop move; verify recovered R and no duplicate scale-out.
    Verify a netting account is rejected. Check independent old/new-session

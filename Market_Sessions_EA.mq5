@@ -1,12 +1,15 @@
 #property strict
-#property version "1.01"
+#property version "1.02"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
+#property tester_indicator "Market_Sessions_Boxes.ex5"
 
 #include <Trade/Trade.mqh>
 #include "Market_Sessions_Core.mqh"
 
 input group "EA Control"
 input bool InpEnableEA = true; // Enable new entries; existing positions remain managed
+input bool InpShowSessionBoxes = true; // Automatically attach matching indicator on chart
+input int  InpBoxTransparency = 85; // Fill transparency 0-100; borders/levels stay visible
 
 enum PositionSizing
 {
@@ -79,6 +82,9 @@ CTrade g_trade;
 EASession g_sessions[3];
 EASessionRange g_ranges[];
 int g_atr = INVALID_HANDLE;
+int g_visual_indicator = INVALID_HANDLE;
+string g_visual_name = "";
+bool g_visual_attached = false;
 datetime g_day = 0;
 datetime g_start_bar = 0;
 datetime g_last_signal_bar = 0;
@@ -117,6 +123,35 @@ bool ConfigureEASession(const int index, const string name, const bool enabled,
    return true;
 }
 
+bool AttachSessionBoxes()
+{
+   if(!InpShowSessionBoxes ||
+      (MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_VISUAL_MODE)))
+      return true;
+   g_visual_name = StringFormat("MSB EA %I64u %I64u", InpMagic, GetMicrosecondCount());
+   g_visual_indicator = iCustom(_Symbol, _Period, "Market_Sessions_Boxes",
+      InpBrokerUTCOffset, InpBrokerDSTRule, InpBrokerDSTMinutes, false,
+      InpAsianOpenHour, InpAsianOpenMin, InpAsianCloseHour, InpAsianCloseMin, InpBoxTransparency,
+      InpLondonOpenHour, InpLondonOpenMin, InpLondonCloseHour, InpLondonCloseMin, InpBoxTransparency,
+      InpNYOpenHour, InpNYOpenMin, InpNYCloseHour, InpNYCloseMin, InpBoxTransparency,
+      true, true, 1, InpDaysToMonitor, g_visual_name);
+   if(g_visual_indicator == INVALID_HANDLE)
+   {
+      Print("Cannot load session boxes. Compile Market_Sessions_Boxes.mq5 with ",
+            "Market_Sessions_Core.mqh in MQL5/Indicators, then reattach the EA. Error: ",
+            GetLastError());
+      return false;
+   }
+   if(!ChartIndicatorAdd(ChartID(), 0, g_visual_indicator))
+   {
+      Print("Cannot attach session boxes to the EA chart. Error: ", GetLastError());
+      return false;
+   }
+   g_visual_attached = true;
+   ChartRedraw();
+   return true;
+}
+
 int OnInit()
 {
    if(!MathIsValidNumber(InpRiskPercent) || !MathIsValidNumber(InpFixedLots) ||
@@ -130,7 +165,8 @@ int OnInit()
       InpBrokerUTCOffset < -14 || InpBrokerUTCOffset > 14 ||
       InpBrokerDSTRule < BROKER_DST_NONE || InpBrokerDSTRule > BROKER_DST_NZ ||
       InpBrokerDSTMinutes < 1 || InpBrokerDSTMinutes > 120 ||
-      InpDaysToMonitor < 1 || InpDaysToMonitor > 30)
+      InpDaysToMonitor < 1 || InpDaysToMonitor > 30 ||
+      InpBoxTransparency < 0 || InpBoxTransparency > 100)
    {
       Print("Invalid sizing, ATR, magic, spread, timezone or monitoring inputs.");
       return INIT_PARAMETERS_INCORRECT;
@@ -168,6 +204,8 @@ int OnInit()
       Print("EA requires immediate FOK or IOC order filling. Error: ", GetLastError());
       return INIT_FAILED;
    }
+   if(!AttachSessionBoxes())
+      return INIT_FAILED;
    Print("Market Sessions EA: explicit broker timezone UTC", InpBrokerUTCOffset,
          ", DST rule ", (int)InpBrokerDSTRule,
          ". Each entry uses the full risk/lot input; combined risk can be twice the setting.",
@@ -180,6 +218,17 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   if(g_visual_attached)
+   {
+      if(!ChartIndicatorDelete(ChartID(), 0, g_visual_name))
+         Print("Cannot remove EA-owned session indicator. Error: ", GetLastError());
+      g_visual_attached = false;
+   }
+   if(g_visual_indicator != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_visual_indicator);
+      g_visual_indicator = INVALID_HANDLE;
+   }
    if(g_atr != INVALID_HANDLE)
       IndicatorRelease(g_atr);
 }
