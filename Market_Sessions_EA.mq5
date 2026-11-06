@@ -1,5 +1,5 @@
 #property strict
-#property version "1.02"
+#property version "1.03"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
@@ -76,6 +76,7 @@ struct EASessionRange
    double low;
    bool loaded;
    bool evaluated;
+   bool second_attempted;
 };
 
 CTrade g_trade;
@@ -483,6 +484,58 @@ bool EntryVolume(const bool buy, const double price, const double stop,
    return true;
 }
 
+string SessionEntryComment(const datetime start, const bool second)
+{
+   return (second ? "MSBM " : "MSBH ") + IntegerToString((long)start);
+}
+
+bool SessionTradeState(const EASessionRange &range, ulong &first_id,
+                       bool &second_filled, bool &profit_taken)
+{
+   first_id = 0;
+   second_filled = false;
+   profit_taken = false;
+   if(!HistorySelect(range.start, TimeCurrent()))
+   {
+      Warn("Cannot recover session trades; new entries suspended.");
+      return false;
+   }
+   ulong second_id = 0;
+   for(int i = 0; i < HistoryDealsTotal(); i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(HistoryDealGetString(deal, DEAL_SYMBOL) != _Symbol ||
+         (ulong)HistoryDealGetInteger(deal, DEAL_MAGIC) != InpMagic ||
+         HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN)
+         continue;
+      string comment = HistoryDealGetString(deal, DEAL_COMMENT);
+      ulong order = (ulong)HistoryDealGetInteger(deal, DEAL_ORDER);
+      string order_comment = HistoryOrderGetString(order, ORDER_COMMENT);
+      ulong identifier = (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+      if(comment == SessionEntryComment(range.start, false) ||
+         order_comment == SessionEntryComment(range.start, false))
+         first_id = identifier;
+      if(comment == SessionEntryComment(range.start, true) ||
+         order_comment == SessionEntryComment(range.start, true))
+      {
+         second_id = identifier;
+         second_filled = true;
+      }
+   }
+   for(int i = 0; i < HistoryDealsTotal(); i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      ulong identifier = (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+      if(identifier == 0 || (identifier != first_id && identifier != second_id))
+         continue;
+      long leg = HistoryDealGetInteger(deal, DEAL_ENTRY);
+      if((leg == DEAL_ENTRY_OUT || leg == DEAL_ENTRY_OUT_BY || leg == DEAL_ENTRY_INOUT) &&
+         HistoryDealGetDouble(deal, DEAL_PROFIT) > 0)
+         profit_taken = true;
+   }
+   return true;
+}
+
 void EnterTrades(const EASessionRange &range, const int direction, const MqlTick &tick)
 {
    if(!InpEnableEA)
@@ -498,6 +551,14 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
    }
    if(!TradingAllowed())
       return;
+   ulong first_id;
+   bool second_filled, profit_taken;
+   if(!SessionTradeState(range, first_id, second_filled, profit_taken) ||
+      first_id != 0 || second_filled || profit_taken)
+   {
+      Print("Session entry skipped: already traded, profit locked or history unavailable.");
+      return;
+   }
    if(InpMaxSpreadPoints > 0 && (tick.ask - tick.bid) / _Point > InpMaxSpreadPoints)
    {
       Print("Breakout skipped: spread exceeds entry limit.");
@@ -546,7 +607,7 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
       Print("Breakout pair skipped: insufficient margin or margin calculation failed. Error: ", GetLastError());
       return;
    }
-   string comment = "MSB HIGH " + g_sessions[range.session].name;
+   string comment = SessionEntryComment(range.start, false);
    bool sent = buy ? g_trade.Buy(market_volume, _Symbol, 0, stop, 0, comment) :
                      g_trade.Sell(market_volume, _Symbol, 0, stop, 0, comment);
    if(!TradeResult(sent, "High-risk breakout entry"))
@@ -555,42 +616,12 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
       return;
    }
    Print(comment, " entry filled. Volume=", g_trade.ResultVolume(), ", SL=", stop);
-   long expiry_mode = SymbolInfoInteger(_Symbol, SYMBOL_EXPIRATION_MODE);
-   ENUM_ORDER_TYPE_TIME time_type = ORDER_TIME_SPECIFIED;
-   datetime expiry = range.next_session;
-   if((expiry_mode & SYMBOL_EXPIRATION_SPECIFIED) == 0)
-   {
-      if((expiry_mode & SYMBOL_EXPIRATION_GTC) == 0)
-      {
-         Print("Midpoint entry skipped: broker supports neither specified expiry nor GTC.");
-         return;
-      }
-      time_type = ORDER_TIME_GTC;
-      expiry = 0;
-      Print("Midpoint uses terminal-side expiry; terminal must stay running and connected.");
-   }
-   comment = "MSB MID " + IntegerToString((long)range.next_session);
-   g_trade.SetTypeFilling(ORDER_FILLING_RETURN);
-   sent = buy ? g_trade.BuyLimit(limit_volume, midpoint, _Symbol, stop, 0,
-                                 time_type, expiry, comment) :
-                g_trade.SellLimit(limit_volume, midpoint, _Symbol, stop, 0,
-                                  time_type, expiry, comment);
-   uint code = g_trade.ResultRetcode();
-   string result_description = g_trade.ResultRetcodeDescription();
-   ulong order = g_trade.ResultOrder();
-   if(!g_trade.SetTypeFillingBySymbol(_Symbol))
-      Warn("Cannot restore immediate filling policy after midpoint submission.");
-   if(!sent || (code != TRADE_RETCODE_PLACED && code != TRADE_RETCODE_DONE))
-      Print("Midpoint limit failed; market position remains protected: ", code, " ",
-            result_description);
-   else
-      Print("Medium-risk midpoint limit accepted: order=", order,
-            ", price=", midpoint, ", volume=", limit_volume,
-            ", expiry=", TimeToString(range.next_session, TIME_DATE | TIME_SECONDS));
+   Print("Midpoint trigger armed only while first trade is open in drawdown and session has no profit.");
 }
 
-void ExpireMidpointOrders()
+bool CancelLegacyMidpointOrders()
 {
+   bool clear = true;
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       ulong ticket = OrderGetTicket(i);
@@ -599,30 +630,125 @@ void ExpireMidpointOrders()
          (OrderGetInteger(ORDER_TYPE) != ORDER_TYPE_BUY_LIMIT &&
           OrderGetInteger(ORDER_TYPE) != ORDER_TYPE_SELL_LIMIT))
          continue;
-      string comment = OrderGetString(ORDER_COMMENT);
-      datetime expiry = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
-      if(expiry == 0 && StringFind(comment, "MSB MID ") == 0)
-         expiry = (datetime)StringToInteger(StringSubstr(comment, 8));
-      if(InpEnableEA && expiry <= 0)
+      if(!TradingAllowed())
       {
-         Warn("Midpoint expiry is missing from broker history; cancellation required.");
+         clear = false;
          continue;
       }
-      if((InpEnableEA && TimeTradeServer() < expiry) || !TradingAllowed())
-         continue;
       bool sent = g_trade.OrderDelete(ticket);
       if(!sent || g_trade.ResultRetcode() != TRADE_RETCODE_DONE)
-         Warn(StringFormat("Expired midpoint cancellation failed: %u %s",
+      {
+         clear = false;
+         Warn(StringFormat("Legacy midpoint cancellation failed: %u %s",
                            g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+      }
       else
-         Print(InpEnableEA ? "Expired midpoint order cancelled: " :
-                            "Disabled EA midpoint order cancelled: ", ticket);
+         Print("Unsafe resting midpoint order cancelled: ", ticket);
+   }
+   return clear;
+}
+
+void ProcessMidpointTriggers(const MqlTick &tick)
+{
+   if(!InpEnableEA || ExternalSymbolOccupied() || HasPendingEAOrder() ||
+      !RebuildRanges(tick.time))
+      return;
+   for(int i = 0; i < ArraySize(g_ranges); i++)
+   {
+      if(g_ranges[i].second_attempted || tick.time < g_ranges[i].end ||
+         tick.time >= g_ranges[i].next_session)
+         continue;
+      ulong first_id;
+      bool second_filled, profit_taken;
+      if(!SessionTradeState(g_ranges[i], first_id, second_filled, profit_taken))
+         continue;
+      if(second_filled || profit_taken)
+      {
+         g_ranges[i].second_attempted = true;
+         if(profit_taken)
+            Print("Session ", g_ranges[i].start, " done: profitable exit; midpoint trigger cancelled.");
+         continue;
+      }
+      if(first_id == 0)
+         continue;
+      ulong ticket = 0;
+      for(int p = PositionsTotal() - 1; p >= 0; p--)
+      {
+         ulong candidate = PositionGetTicket(p);
+         if(candidate != 0 && PositionGetString(POSITION_SYMBOL) == _Symbol &&
+            (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic &&
+            (ulong)PositionGetInteger(POSITION_IDENTIFIER) == first_id)
+         {
+            ticket = candidate;
+            break;
+         }
+      }
+      if(ticket == 0)
+      {
+         g_ranges[i].second_attempted = true;
+         continue;
+      }
+      bool buy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+      double executable = buy ? tick.bid : tick.ask;
+      if(!g_ranges[i].loaded)
+      {
+         if(!LoadOpeningRange(_Symbol, g_ranges[i].start, tick.time,
+                              g_ranges[i].high, g_ranges[i].low))
+         {
+            Warn("Cannot recover opening range for midpoint trigger.");
+            continue;
+         }
+         g_ranges[i].loaded = true;
+      }
+      if(!MidpointEntryEligible(true, false, false, buy, entry, executable,
+                                tick.ask, tick.bid, (g_ranges[i].high + g_ranges[i].low) / 2))
+         continue;
+      if(InpMaxSpreadPoints > 0 && (tick.ask - tick.bid) / _Point > InpMaxSpreadPoints)
+         continue;
+      if(!TradingAllowed())
+         continue;
+      double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(tick_size <= 0)
+      {
+         Warn("Invalid tick size for midpoint trigger.");
+         continue;
+      }
+      double stop = StopPrice((buy ? g_ranges[i].low : g_ranges[i].high) +
+         (buy ? -1 : 1) * InpStopBufferPoints * _Point, tick_size, buy);
+      double distance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+      if(stop <= 0 || (buy ? tick.bid - stop : stop - tick.ask) < distance ||
+         (buy ? stop >= tick.bid : stop <= tick.ask))
+      {
+         Warn("Midpoint entry blocked by range stop distance.");
+         continue;
+      }
+      double price = buy ? tick.ask : tick.bid;
+      double volume, margin;
+      if(!EntryVolume(buy, price, stop, AccountInfoDouble(ACCOUNT_EQUITY), true, volume))
+         continue;
+      if(!OrderCalcMargin(buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, _Symbol,
+                          volume, price, margin) ||
+         margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
+      {
+         Warn("Midpoint entry blocked by insufficient margin or margin calculation failure.");
+         continue;
+      }
+      // Recheck session history and first position immediately before sending.
+      if(!SessionTradeState(g_ranges[i], first_id, second_filled, profit_taken) ||
+         second_filled || profit_taken || !PositionSelectByTicket(ticket))
+         continue;
+      g_ranges[i].second_attempted = true;
+      string comment = SessionEntryComment(g_ranges[i].start, true);
+      bool sent = buy ? g_trade.Buy(volume, _Symbol, 0, stop, 0, comment) :
+                        g_trade.Sell(volume, _Symbol, 0, stop, 0, comment);
+      TradeResult(sent, "Drawdown-only midpoint entry");
    }
 }
 
 void OnTimer()
 {
-   ExpireMidpointOrders();
+   CancelLegacyMidpointOrders();
 }
 
 // Recover original risk and scale-out progress from broker history, including after restart.
@@ -910,8 +1036,11 @@ void OnTick()
       Warn("Valid symbol quotes are unavailable.");
       return;
    }
-   ExpireMidpointOrders();
+   bool legacy_clear = CancelLegacyMidpointOrders();
    ManagePositions(tick);
+   if(!legacy_clear)
+      return;
+   ProcessMidpointTriggers(tick);
    datetime current_bar = iTime(_Symbol, PERIOD_M5, 0);
    if(current_bar <= 0)
    {

@@ -135,6 +135,16 @@ double FloorVolume(const double volume, const double step)
    return NormalizeDouble(MathFloor(volume / step + 1e-8) * step, 8);
 }
 
+bool MidpointEntryEligible(const bool first_open, const bool profit_taken,
+                           const bool second_entered, const bool buy,
+                           const double entry, const double executable,
+                           const double ask, const double bid, const double midpoint)
+{
+   return first_open && !profit_taken && !second_entered &&
+          (buy ? executable < entry && ask <= midpoint :
+                 executable > entry && bid >= midpoint);
+}
+
 double StopPrice(const double price, const double tick_size, const bool buy)
 {
    return NormalizeDouble((buy ? MathFloor(price / tick_size + 1e-8) :

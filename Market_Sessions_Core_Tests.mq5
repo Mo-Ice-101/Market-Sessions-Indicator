@@ -123,6 +123,22 @@ void OnStart()
          "Buy initial/trailing stop rounds down to tick");
    Check(MathAbs(StopPrice(100.13, 0.25, false) - 100.25) < 1e-8,
          "Sell initial/trailing stop rounds up to tick");
+   Check(MidpointEntryEligible(true, false, false, true, 110, 99, 100, 99, 100),
+         "Buy second entry at midpoint while first in drawdown");
+   Check(MidpointEntryEligible(true, false, false, false, 90, 101, 101, 100, 100),
+         "Sell second entry at midpoint while first in drawdown");
+   Check(!MidpointEntryEligible(true, true, false, false, 90, 101, 101, 100, 100),
+         "Screenshot regression: 2R profit locks later midpoint entry");
+   Check(!MidpointEntryEligible(false, false, false, true, 110, 99, 100, 99, 100),
+         "Closed first trade blocks second entry");
+   Check(!MidpointEntryEligible(true, false, true, true, 110, 99, 100, 99, 100),
+         "Only one second entry allowed");
+   Check(!MidpointEntryEligible(true, false, false, true, 100, 101, 102, 101, 103),
+         "Profitable first trade cannot trigger second");
+   Check(!MidpointEntryEligible(true, false, false, true, 100, 100, 100, 99, 100),
+         "Break-even first trade is not drawdown");
+   Check(!MidpointEntryEligible(true, false, false, true, 110, 101, 102, 101, 100),
+         "Midpoint must be reached on executable entry side");
    Print(g_failures == 0 ? "PASS: all Market Sessions Core assertions." :
                          StringFormat("FAIL: %d assertions.", g_failures));
 }

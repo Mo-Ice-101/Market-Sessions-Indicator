@@ -69,20 +69,31 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   subsequent M5 close strictly above/below that candle's range confirms a
   buy/sell. Wicks and boundary equality do not signal. RSI is not a filter.
 - Each opening range can create one **high-risk market entry** and one
-  **medium-risk limit entry at its 50% midpoint**, in the same direction.
-  Midpoint placement follows a confirmed market fill. Rejected requests are
-  logged, not queued; if midpoint placement fails, the market trade retains
-  its protective stop. "Medium risk" describes entry style, not lower sizing.
+  **medium-risk entry when price retraces to its 50% midpoint**, in the same
+  direction, only while the first position is still open in price drawdown.
+  Buy triggers require ask at/below midpoint and bid below the first entry;
+  sell triggers require bid at/above midpoint and ask above the first entry.
+  A market request is used instead of a resting limit so eligibility can be
+  checked before execution. Fill price can differ from midpoint due to gaps
+  or slippage. Rejected second-entry requests are consumed until restart.
+  Broker history prevents another second entry after a fill.
+  "Medium risk" describes entry style, not lower sizing.
 - A **hedging account is required**. Earlier sessions' EA positions do not
   block new opening-range pairs: every entry keeps its own original R, 2R exit
   and ATR trail across all later sessions. Manual/other-EA exposure on the
   symbol and unresolved immediate market requests block new pairs.
   Simultaneous signals use reference-date order, then Asian/London/NY order.
-- Unfilled midpoint limits expire at the next scheduled session opening,
-  including disabled sessions and calendar weekends. Broker-side specified
-  expiry is preferred; GTC fallback uses an expiry timestamp in the order
-  comment and EA timer/tick cancellation. Keep the terminal running/connected
-  and trading enabled for that fallback; offline expiry cannot be guaranteed.
+- **Taking profit ends new entries for that session**, including a profitable
+  2R partial exit or any profitable stop/manual exit. Profit means an exit deal
+  with positive `DEAL_PROFIT` before fees. Broker history recovers this lock
+  after restart. Already-filled positions keep their own exit management.
+  If the first trade closes without profit, its midpoint trigger also ends.
+  There are at most two independently managed entry positions per session.
+- Unfilled midpoint triggers end at the next scheduled session opening,
+  including disabled sessions and calendar weekends. No broker pending order
+  is created. Running/connected terminals are required to trigger entries.
+  Legacy midpoint limits from earlier versions are cancelled immediately
+  on timer/tick updates; failed cancellations are logged and retried.
   Session boundaries never close filled trades or reset their trailing stops.
 - `InpDaysToMonitor` defaults to the indicator's five-calendar-day horizon.
   Older sessions expire. Only confirmations in the immediately preceding M5
@@ -109,7 +120,7 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   and rejected requests. Live 2R markers are stored in account/magic/position-
   scoped terminal global variables and removed after closure; tester runs use
   only in-memory markers and never read/write live markers. Partial execution
-  is reconciled before requesting the remaining half. Resting midpoint limits
+  is reconciled before requesting the remaining half. Midpoint triggers
   do not block trailing or exits; unresolved immediate market requests do.
   Missing/inconsistent history or externally changed positions suspend
   management with an Experts-tab diagnostic; the existing broker SL remains.
@@ -128,10 +139,10 @@ Percentage sizing defaults to **0.5% of current equity**; fixed size defaults
 to **0.10 lots**. Both are user-adjustable and apply **separately to each
 entry**, not split between them. Combined intended risk can reach twice the
 selected percentage (or twice the selected lots), plus existing sessions'
-remaining exposure. Both risk budgets use equity at the signal time.
+remaining exposure. Each risk budget uses equity at its entry request time.
 Percentage sizing uses
 `OrderCalcProfit` in account currency and includes the configured adverse
-deviation allowance for market entries (limit entries use their limit price),
+deviation allowance for both market requests,
 then rounds **down** to a volume divisible into two valid
 equal halves. It never rounds up to meet minimum lots. Fixed lots must already
 be a valid, exactly divisible volume; an invalid value skips the entry with a
@@ -178,8 +189,14 @@ Use **Every tick based on real ticks** in Strategy Tester where available:
 4. On a demo hedging account, restart before and after each entry's half-close,
    including after a stop move; verify recovered R and no duplicate scale-out.
    Verify a netting account is rejected. Check independent old/new-session
-   trails, midpoint expiry (specified and GTC), simultaneous signals, history
+   trails, midpoint-trigger expiry, simultaneous signals, history
    delays, external exposure and partial fills where reproducible.
+   Reproduce the reported sequence: first sell enters, takes 2R profit, exits
+   its remainder, then price reaches midpoint. No second entry may occur.
+   Also test a midpoint reached before any profit while the first is in
+   drawdown (second permitted), first closing at loss/break-even, profit in
+   either already-filled leg, restart after profit, and later sessions
+   remaining independently eligible.
 5. Optimize on a training period, then freeze settings and evaluate a separate
    holdout period with realistic costs. Do not optimize and evaluate on the same
    history. No profitability or future performance is guaranteed.
