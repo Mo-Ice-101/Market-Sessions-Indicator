@@ -1,30 +1,165 @@
 # Market-Sessions-Indicator
-MQL5 indicator that draws boxes around Asian, London, and NY trading sessions with M15 breakout colors and customizable transparency
+MQL5 opening-M15 range indicator with M5 breakout colors, high/midpoint/low
+levels to the next session, and a two-entry hedging-account EA.
 
 ## Installation
 
 1. In MetaTrader 5, select **File → Open Data Folder**.
 2. Copy `Market_Sessions_Boxes.mq5` into `MQL5/Indicators`.
-3. Open the file in MetaEditor and compile with **F7**. The included
+3. Copy `Market_Sessions_Core.mqh` into the same directory as the indicator.
+   Open the indicator in MetaEditor and compile with **F7**. The included
    `Canvas/Canvas.mqh` is part of MT5's standard library; no downloads are needed.
 4. Refresh **Navigator → Indicators** and attach **Market Sessions Boxes** to a chart.
+
+## Expert Advisor
+
+`Market_Sessions_EA.mq5` is a separate trading EA; the indicator remains available.
+Both use `Market_Sessions_Core.mqh` for regional DST, opening M15 ranges and M5 breakout
+confirmation. The EA does not require the indicator on the chart and does not
+draw session boxes. Attach the indicator separately for visualization.
+
+Copy the EA and `Market_Sessions_Core.mqh` together into `MQL5/Experts`, then
+compile the EA with F7. Run it in Strategy Tester and on a demo account before
+enabling live algorithmic trading.
+
+### Entry and management
+
+- Asian, London and NY can be enabled independently. Their schedules and
+  reference timezones match the indicator. The EA requires an **explicit broker
+  standard UTC offset and DST rule** in both live trading and backtesting;
+  it does not learn offsets from the live clock. For matching visuals, disable
+  automatic detection on the indicator and use the same timezone inputs.
+- After the first complete M15 candle at/after a session opening, the first
+  subsequent M5 close strictly above/below that candle's range confirms a
+  buy/sell. Wicks and boundary equality do not signal. RSI is not a filter.
+- Each opening range can create one **high-risk market entry** and one
+  **medium-risk limit entry at its 50% midpoint**, in the same direction.
+  Midpoint placement follows a confirmed market fill. Rejected requests are
+  logged, not queued; if midpoint placement fails, the market trade retains
+  its protective stop. "Medium risk" describes entry style, not lower sizing.
+- A **hedging account is required**. Earlier sessions' EA positions do not
+  block new opening-range pairs: every entry keeps its own original R, 2R exit
+  and ATR trail across all later sessions. Manual/other-EA exposure on the
+  symbol and unresolved immediate market requests block new pairs.
+  Simultaneous signals use reference-date order, then Asian/London/NY order.
+- Unfilled midpoint limits expire at the next scheduled session opening,
+  including disabled sessions and calendar weekends. Broker-side specified
+  expiry is preferred; GTC fallback uses an expiry timestamp in the order
+  comment and EA timer/tick cancellation. Keep the terminal running/connected
+  and trading enabled for that fallback; offline expiry cannot be guaranteed.
+  Session boundaries never close filled trades or reset their trailing stops.
+- `InpDaysToMonitor` defaults to the indicator's five-calendar-day horizon.
+  Older sessions expire. Only confirmations in the immediately preceding M5
+  candle are eligible: starting/restarting the EA never enters historical
+  signals. Missing history is retried within the current M5 candle; signals
+  missed before history arrives are not traded late. The first M5 candle
+  closing after startup can signal.
+- Both entries use initial SL **10 symbol points beyond the opposite M15
+  range boundary**: below its low for buys, above its high for sells.
+  `InpStopBufferPoints` is adjustable. This is not a 10-point distance from
+  entry or an ATR initial stop. Prices round outward to tradable ticks.
+  Broker stop-distance violations reject the pair rather than widen the stop.
+- **R** is actual filled entry price minus the original protective stop distance
+  (the reverse for sells). At **2R**, measured using executable bid for buys
+  and ask for sells, the EA closes **50% of the original filled volume**.
+  It then moves the remaining stop to entry or better and trails it at
+  **2 × the latest completed M15 ATR(14)**. There is no fixed final take profit.
+  Trailing is checked every tick, never loosens an existing stop, and cannot
+  move beyond break-even toward a loss. Break-even is price-based and does
+  not include commission or swap.
+- Broker history supplies original entry, initial SL and completed scale-out
+  volume after restart, so moving the stop does not redefine R or repeat the
+  half-close. Once 2R is reached, the scale-out remains armed across retracements
+  and rejected requests. Live 2R markers are stored in account/magic/position-
+  scoped terminal global variables and removed after closure; tester runs use
+  only in-memory markers and never read/write live markers. Partial execution
+  is reconciled before requesting the remaining half. Resting midpoint limits
+  do not block trailing or exits; unresolved immediate market requests do.
+  Missing/inconsistent history or externally changed positions suspend
+  management with an Experts-tab diagnostic; the existing broker SL remains.
+  Do not share the magic number with another EA or manually alter its position.
+- Each hedged position uses ticket-targeted reductions. The symbol
+  must support immediate FOK or IOC filling (FOK preferred). Stops, freeze
+  levels, volume steps and minimum remaining lots are respected. A rejected
+  half-close or blocked break-even/trail is logged and retried on later ticks.
+  A retracement, broker restriction or execution failure can prevent protection
+  at break-even; the EA cannot guarantee a risk-free remainder.
+
+### Sizing and inputs
+
+Choose `InpSizing = SIZE_EQUITY_PERCENT` or `SIZE_FIXED_LOTS`.
+Percentage sizing defaults to **0.5% of current equity**; fixed size defaults
+to **0.10 lots**. Both are user-adjustable and apply **separately to each
+entry**, not split between them. Combined intended risk can reach twice the
+selected percentage (or twice the selected lots), plus existing sessions'
+remaining exposure. Both risk budgets use equity at the signal time.
+Percentage sizing uses
+`OrderCalcProfit` in account currency and includes the configured adverse
+deviation allowance for market entries (limit entries use their limit price),
+then rounds **down** to a volume divisible into two valid
+equal halves. It never rounds up to meet minimum lots. Fixed lots must already
+be a valid, exactly divisible volume; an invalid value skips the entry with a
+diagnostic. Each half must meet the broker's minimum lot size. The two
+risk-sized volumes may differ because their stop distances differ. Estimated
+combined margin and existing plus new directional exposure are checked.
+
+`InpATRPeriod`, `InpStopBufferPoints` and `InpTrailingATR` are optimizable inputs;
+the ATR timeframe is always M15 and the 2R/50% rule is fixed. `InpMagic`
+identifies managed positions. `InpDeviationPoints` is in symbol points, not
+pips. `InpMaxSpreadPoints = 0` disables the optional entry spread filter.
+Sizing excludes commissions, swap and gaps; actual execution and stop fills
+can exceed the intended risk budget.
+
+### EA verification in MetaTrader 5
+
+Compile both the EA and indicator after installing the shared header. For
+pure core assertions, copy `Market_Sessions_Core_Tests.mq5` and the header into
+`MQL5/Scripts`, compile and run the script; the Experts tab should report
+`PASS: all Market Sessions Core assertions.`
+
+Use **Every tick based on real ticks** in Strategy Tester where available:
+
+1. Compare EA signals against indicator arrows with identical session/timezone
+   inputs. Test buys, sells, wick-only breaks, equality, overnight ranges,
+   non-M15-aligned opening times and the DST dates below. Verify London/NY still
+   signal after their opening time even when the EA was started before Asian open.
+2. Check each entry's initial SL against the opposite opening-range boundary
+   plus buffer, its own actual filled R, and that
+   no scale-out happens below 2R. At 2R verify exactly half the original volume
+   closes, the remaining stop reaches entry or better, and its subsequent
+   ATR trail never loosens. Test both directions and changing ATR.
+3. Test risk and fixed-lot modes, coarse volume steps, insufficient equity,
+   odd-step fixed lots, spread limits, insufficient margin, disabled trading
+   and broker stop/freeze rejection. Rejections must be visible in the log.
+4. On a demo hedging account, restart before and after each entry's half-close,
+   including after a stop move; verify recovered R and no duplicate scale-out.
+   Verify a netting account is rejected. Check independent old/new-session
+   trails, midpoint expiry (specified and GTC), simultaneous signals, history
+   delays, external exposure and partial fills where reproducible.
+5. Optimize on a training period, then freeze settings and evaluate a separate
+   holdout period with realistic costs. Do not optimize and evaluate on the same
+   history. No profitability or future performance is guaranteed.
 
 ## Defaults and inputs
 
 | Session | Open | Close |
 | --- | --- | --- |
-| Asian | 00:00 | 08:00 |
-| London | 10:00 | 14:00 |
-| NY | 14:30 | 21:00 |
+| Asian | 01:00 | 02:00 |
+| London | 11:00 | 15:00 |
+| NY | 13:30 | 21:00 |
 
 Asian and London hours are **GMT+2 winter reference times**; NY hours are
 **UTC winter reference times**, not the current broker clock. NY's default
-14:30 represents the NYSE's 09:30 EST opening. Boxes and opening-time labels
+13:30 represents 08:30 EST. Boxes and opening-time labels
 are converted automatically to broker server time for each date.
 Each session has separate opening/closing hour and minute and
 transparency inputs. Transparency ranges from **0 (opaque) to 100 (invisible
 fill)**; borders and labels match the block's signal color. The default is 85.
 The former per-session color inputs are replaced by automatic gray/green/red colors.
+
+Closing times are retained as session settings only: they do not limit
+breakout monitoring, define the box range, end levels or close trades.
+Monitoring and levels end at the **next session opening** instead.
 
 - Show or hide session names; optionally append their opening times.
 - Set border width (1–5 pixels) and history (1–30 calendar days, default 5).
@@ -33,9 +168,9 @@ The former per-session color inputs are replaced by automatic gray/green/red col
 
 ## Timezones and automatic DST
 
-- `InpDetectBrokerOffset` (default `true`) automatically measures
+- `InpDetectBrokerOffset` (default `false`) optionally measures
   `TimeTradeServer() - TimeGMT()` while connected and receiving recent quotes.
-  No broker timezone configuration is needed for the live offset. This requires
+  When enabled, no broker configuration is needed for the live offset. This requires
   a correct computer clock/timezone. Disconnected or stale quotes are not sampled.
 - Observations are saved once per UTC day and whenever the offset changes, in a
   broker-server-specific `MSB_Offsets_*.csv` file in the terminal's `MQL5/Files`
@@ -79,9 +214,9 @@ at local daylight 03:00; New Zealand starts on the last Sunday in September
 at local standard 02:00 and ends on the first Sunday in April at daylight 03:00.
 These presets model recurring rules, not a historical timezone database.
 
-Asian hours remain fixed in UTC (the default is 22:00–06:00 UTC). London
+Asian hours remain fixed in UTC (the default opening is 23:00 UTC). London
 and NY inputs retain their respective local wall-clock schedules: the defaults
-are London 08:00–12:00 local and New York 09:30–16:00 local. To customize them,
+are London 09:00 local and New York 08:30 local openings. To customize them,
 enter the desired winter time converted to GMT+2 for London (local +2 hours)
 or UTC for New York (local +5 hours). Regional DST is applied before adding
 the broker's date-specific UTC offset; a broker with no DST still gets the
@@ -93,12 +228,12 @@ fall-back the first occurrence is used. Intervals collapsing to zero or negative
 server-clock duration are skipped.
 
 For example, with detection disabled and a fixed GMT+2 broker, the summer
-defaults become Asian 00:00–08:00, London 09:00–13:00, NY 15:30–22:00.
-In winter on that SAST (UTC+2, no DST) broker they are Asian 00:00–08:00,
-London 10:00–14:00, NY 16:30–23:00.
+opening defaults become Asian 01:00, London 10:00, NY 14:30.
+In winter on that SAST (UTC+2, no DST) broker they are Asian 01:00,
+London 11:00, NY 15:30.
 With a GMT+2/+3 **European-rule** broker, when both regions are in DST they
-become Asian 01:00–09:00, London 10:00–14:00, NY 16:30–23:00. In the weeks
-when only the US is in DST, NY is 15:30–22:00 on that broker. History is
+become Asian 02:00, London 11:00, NY 15:30. In the weeks
+when only the US is in DST, NY opens at 14:30 on that broker. History is
 converted per date, never using today's DST state for all past boxes.
 
 NY inputs previously used GMT+2 winter references. The corrected conversion
@@ -107,35 +242,37 @@ schedule, subtract two hours from its old opening and closing inputs.
 
 ## Behavior
 
-Ranges use the symbol's **M1 highs/lows**, regardless of the chart timeframe.
-The opening minute is included; the closing minute is excluded. Active boxes
-extend to the scheduled close, but their price range uses only available data
-through the latest server quote. Future sessions and sessions without bars
-(such as weekends) are not drawn. Overnight sessions from the preceding day
-are retained when they intersect the configured history window.
+Ranges use the **first full M15 candle opening at or after the converted
+session opening**, independent of chart timeframe. At 11:00 use 11:00–11:15;
+at a custom 11:07 opening use 11:15–11:30. Nothing is drawn until that candle
+closes and its high/low are available; missing or zero-range candles are skipped.
+The range is then fixed: subsequent candles never expand it.
 
-All boxes remain **gray** during the session and while awaiting confirmation.
-After the session closes, each **completed M15 candle** after the close is
-checked in order until one breaks the range. The first candle whose **close
-price** is strictly above the session high turns the box **green** (buy);
-strictly below the session low turns it **red** (sell). Wicks, equality with
-either boundary, and closes inside the range do not signal a break; monitoring
-continues with the next candle. The M15 candle that confirmed the break is
-marked with a small **orange arrow**: pointing up from just below its low for
-green (buy) breaks, pointing down from just above its high for red (sell) breaks.
-The final range and color are retained until the session leaves the configured
-history window. Historical sessions are evaluated the same way when loaded.
+The box starts at the scheduled session opening and remains **gray** while
+extending to quote time. Subsequent **completed M5 closes** are checked in
+order: strictly above the opening high confirms **green** (buy), strictly
+below its low confirms **red** (sell). Wicks and boundary equality do not
+signal. Confirmation freezes the box's right edge at the M5 candle's close.
+The first signal is locked even after price reversals.
+
+The high, **50% midpoint** and low lines extend to the next chronological
+Asian/London/NY opening, not the box's frozen edge. They share its signal color;
+the midpoint is dotted. Unconfirmed boxes end at that next opening. No M5
+confirmation at or after that boundary is accepted. Each next opening uses
+its own regional and broker DST; boundaries are scheduled calendar openings,
+even on weekends. An orange arrow marks the confirming M5 candle.
+Historical ranges and levels remain until outside the configured history.
 
 The top-right corner shows the current **RSI(14, close)** of H1, M15 and M5:
 `H1 RSI: XX.XX | M15 RSI: XX.XX | M5 RSI: XX.XX`, regardless of the chart
 timeframe. Values include the forming candle and refresh on **every tick**,
 not only on candle closes; `--` is shown while a timeframe's history is still loading.
 
-The indicator refreshes every 60 seconds and on each new chart bar, and
-repositions fills when the chart is scrolled, zoomed, or resized. M1 history
-may need to download before boxes appear; M15 history may also need to download
+The indicator refreshes every 60 seconds and on each new M5/chart bar, and
+repositions fills when the chart is scrolled, zoomed, or resized. M15 history
+may need to download before boxes appear; M5 history may also need to download
 before confirmation. The timer retries automatically.
-Ranges are limited to the minute history supplied by your broker. Between
+Ranges are limited to the candle history supplied by your broker. Between
 quotes, the server timestamp remains the last known quote time.
 
 Real transparency is rendered with MT5's standard ARGB canvas, with native
@@ -143,7 +280,7 @@ chart objects for borders and labels. Overlapping custom sessions are painted
 in chronological order, with Asian/London/NY order for the same opening day;
 the last fill takes precedence in overlapping pixels. Multiple indicator
 instances use separate object names. Removing or reconfiguring an instance
-cleans up only its own canvas, borders, labels, confirmation arrows, RSI label,
+cleans up only its own canvas, borders, levels, labels, confirmation arrows, RSI label,
 and timezone label, including after partial initialization failures.
 
 ## Manual verification (MetaTrader 5)
@@ -151,53 +288,51 @@ and timezone label, including after partial initialization failures.
 ### NY debug logging
 
 The **Experts** tab contains `NY DEBUG:` messages on every `UpdateSessions()`
-call and every NY opening/closing conversion, including reference dates that
+call and every NY opening conversion, including reference dates that
 are later skipped for rendering. Each conversion logs the dated input,
 UTC after the GMT+2 step (no subtraction for NY), US DST status, the
 0/3600-second DST subtraction, UTC before the broker offset, the offset in
-minutes/seconds, and final server time. Update messages identify opening and
-closing references, converted times, and the opening-label time.
+minutes/seconds, and final server time.
 
 `Expected (ref - US DST + broker)` checks the arithmetic using the reported
 DST state and broker offset; it does not independently verify their correctness.
 `Expected SAST (fixed UTC+2)` is a separate comparison, not an assumption about
-the broker. For a summer 14:30 reference, expect UTC 13:30 and SAST 15:30;
-a broker offset of 180 minutes legitimately produces server time 16:30.
-In winter, expect UTC 14:30 and SAST 16:30. Check both endpoints, overnight
+the broker. For a summer 13:30 reference, expect UTC 12:30 and SAST 14:30;
+a broker offset of 180 minutes legitimately produces server time 15:30.
+In winter, expect UTC 13:30 and SAST 15:30. Check openings, overnight
 date rollovers, and the DST boundary dates below. Logs are unconditional and
 can be verbose across the configured history window; calculations are unchanged.
 
-This repository has no automated test infrastructure. Compilation and visual
+Core assertions are provided in the MQL5 test script. Compilation and visual
 verification require MetaEditor/MT5.
 
 1. Compile with F7 and check for errors/warnings, then attach to an M1 chart
-   with available history. Leave automatic detection enabled and compare the
+   with available history. Enable automatic detection and compare the
    chart's broker UTC offset with server time minus UTC. On a fresh installation,
    check that DST is reported as unverified, rather than a guessed Europe rule.
-2. Compare each box's high/low with M1 candles in `[open, close)`. Check that
-   a spike in the closing minute does not affect the preceding session.
+2. Compare each box's high/low with the first completed M15 candle at/after
+   the converted opening. Later price spikes must not expand its range.
 3. Switch to M5/H1: ranges and converted NY opening times should stay the same.
-4. During an active session, check range expansion after a new bar or the
-   next minute update, and no expansion from prices after the session close.
+4. Verify no box before the opening candle closes. Gray boxes extend with
+   quote time; on M5 confirmation their right edge freezes, not their lines.
 5. Try transparency 0/85/100, toggle labels/time labels, and zoom, scroll,
    and resize. Borders should remain anchored to the session times and range.
-6. Set an overnight interval (e.g. 22:00–02:00), and inspect both sides of
-   midnight. Verify no boxes for future sessions or days without trading.
+6. Set an opening near midnight and inspect both dates. Verify no boxes for
+   missing opening candles and that NY levels end at the next Asian opening.
 7. Attach two instances, then remove one: the other instance and unrelated
    chart objects must remain. Invalid times, transparency, history length,
    and border width should reject initialization with a diagnostic.
-8. Observe an active session and its first post-session M15 candle: the box,
-   border, and label must remain gray until that candle closes. Check a close
-   above the session high (green) and one below the low (red), on M1 and H1 charts.
+8. Observe M5 candles after the opening M15 range: a close above its high
+   turns the box/levels green, below its low red, on every chart timeframe.
 9. Check wick-only breaks, closes exactly on either boundary, and in-range
-   closes: they do not signal; the first later M15 close outside the range does.
-10. Set a close between M15 openings (e.g. 08:07): ignore the 08:00 candle and
-   start with 08:15 after it closes. Also check an overnight session and a
-   trading gap.
+   closes: they do not signal; the first later M5 close outside the range does.
+10. Set a nonaligned opening (e.g. 08:07): use the 08:15 M15 range after its
+   08:30 close, then monitor M5 candles. A candle from before range completion
+   or closing at/after the next session opening cannot signal.
 11. After confirmation, refresh, zoom, scroll, and wait across midnight: colors
    must persist within the history window. Reattach the indicator and confirm
    historical colors match the same rule.
-12. On an M15 chart, verify the small orange arrow marks exactly the candle
+12. On an M5 chart, verify the small orange arrow marks exactly the candle
    whose close first left the range: up arrow under green breaks, down arrow
    over red breaks.
 13. Compare the RSI label with standard RSI(14) indicators on H1, M15 and M5
@@ -205,23 +340,23 @@ verification require MetaEditor/MT5.
    broker offset and DST status occupy a separate line below the RSI without
    overlap, including at higher display scaling and after resizing the chart.
 14. In the strategy tester, use a fixed GMT+2 broker (`BROKER_DST_NONE`) and
-   check March 6/9/30, 2026: London opens at 10:00/10:00/09:00 and NY at
-   16:30/15:30/15:30. Check October 23/26 and November 2: London opens at
-   09:00/10:00/10:00 and NY at 15:30/15:30/16:30. Asian stays at 00:00.
+   check March 6/9/30, 2026: London opens at 11:00/11:00/10:00 and NY at
+   15:30/14:30/14:30. Check October 23/26 and November 2: London opens at
+   10:00/11:00/11:00 and NY at 14:30/14:30/15:30. Asian stays at 01:00.
    For NY transition boundaries on that fixed UTC+2 broker, use custom inputs:
    March 8 at 06:59/07:00 UTC winter reference must convert to 08:59/08:00;
    November 1 at 05:59/06:00 must convert to 06:59/08:00.
    With time labels enabled, verify each label matches its rectangle's opening
-   timestamp in the Objects List: summer NY must show `NY 15:30` on fixed UTC+2,
-   and winter NY `NY 16:30`. Edit an existing NY label's text to an incorrect
+   timestamp in the Objects List: summer NY must show `NY 14:30` on fixed UTC+2,
+   and winter NY `NY 15:30`. Edit an existing NY label's text to an incorrect
    time, then wait for the next session update: it must restore the box's time.
    Check that London/Asian names and times still match their box openings;
    disabling time labels must leave only the session names.
 15. Repeat with a GMT+2 European-rule broker: March 30 should show Asian
-   01:00, London 10:00, NY 16:30; March 9 still shows NY 15:30.
-   With a US-rule broker on March 9, expect Asian 01:00, London 11:00,
-   NY 16:30. Also check a fixed UTC+3 broker: winter openings are Asian
-   01:00, London 11:00, NY 17:30; summer openings are 01:00, 10:00, 16:30.
+   02:00, London 11:00, NY 15:30; March 9 still shows NY 14:30.
+   With a US-rule broker on March 9, expect Asian 02:00, London 12:00,
+   NY 15:30. Also check a fixed UTC+3 broker: winter openings are Asian
+   02:00, London 12:00, NY 16:30; summer openings are 02:00, 11:00, 15:30.
    Keep 30 days visible across transitions to verify older boxes
    retain the offsets for their dates after refreshing or reattaching.
 16. Disable detection and try fixed offsets -5, +5.5, +5.75, and +14.
