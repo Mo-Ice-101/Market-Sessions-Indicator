@@ -1,5 +1,5 @@
 #property strict
-#property version "1.03"
+#property version "1.04"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
@@ -18,9 +18,9 @@ enum PositionSizing
 };
 
 input group "Position Sizing"
-input PositionSizing InpSizing = SIZE_EQUITY_PERCENT;
+input PositionSizing InpSizing = SIZE_FIXED_LOTS;
 input double InpRiskPercent = 0.5;
-input double InpFixedLots = 0.10;
+input double InpFixedLots = 0.04; // Must split into two valid 50% halves
 input ulong  InpMagic = 26011001;
 input ulong  InpDeviationPoints = 20;
 input int    InpMaxSpreadPoints = 0; // 0 disables the entry spread filter
@@ -32,11 +32,12 @@ input double InpTrailingATR = 2.0;
 
 input group "Broker Timezone (explicit; also used in the tester)"
 input double        InpBrokerUTCOffset = 2.0;
-input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_NONE;
+input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_EUROPE;
 input int           InpBrokerDSTMinutes = 60;
 
 input group "Asian Session (GMT+2 winter reference)"
 input bool InpTradeAsian = true;
+input bool InpAsianMidpoint = false; // Second (midpoint) entry for this session
 input int  InpAsianOpenHour = 1;
 input int  InpAsianOpenMin = 0;
 input int  InpAsianCloseHour = 2; // Session setting only; does not end trade management
@@ -44,13 +45,15 @@ input int  InpAsianCloseMin = 0;
 
 input group "London Session (GMT+2 winter reference)"
 input bool InpTradeLondon = true;
+input bool InpLondonMidpoint = false; // Second (midpoint) entry for this session
 input int  InpLondonOpenHour = 11;
 input int  InpLondonOpenMin = 0;
 input int  InpLondonCloseHour = 15; // Session setting only; does not end trade management
 input int  InpLondonCloseMin = 0;
 
 input group "NY Session (UTC winter reference)"
-input bool InpTradeNY = true;
+input bool InpTradeNY = false; // Disabled by default (weakest session in backtest)
+input bool InpNYMidpoint = false; // Second (midpoint) entry for this session
 input int  InpNYOpenHour = 13;
 input int  InpNYOpenMin = 30;
 input int  InpNYCloseHour = 21; // Session setting only; does not end trade management
@@ -64,6 +67,7 @@ struct EASession
    string name;
    int open_minutes;
    bool enabled;
+   bool midpoint;
 };
 
 struct EASessionRange
@@ -108,6 +112,7 @@ void Warn(const string message)
 }
 
 bool ConfigureEASession(const int index, const string name, const bool enabled,
+                        const bool midpoint,
                         const int open_hour, const int open_minute,
                         const int close_hour, const int close_minute)
 {
@@ -120,6 +125,7 @@ bool ConfigureEASession(const int index, const string name, const bool enabled,
    }
    g_sessions[index].name = name;
    g_sessions[index].enabled = enabled;
+   g_sessions[index].midpoint = midpoint;
    g_sessions[index].open_minutes = open_hour * 60 + open_minute;
    return true;
 }
@@ -177,11 +183,11 @@ int OnInit()
       Print("This two-entry EA requires a hedging account for independent 2R management.");
       return INIT_FAILED;
    }
-   if(!ConfigureEASession(0, "ASIAN", InpTradeAsian, InpAsianOpenHour, InpAsianOpenMin,
+   if(!ConfigureEASession(0, "ASIAN", InpTradeAsian, InpAsianMidpoint, InpAsianOpenHour, InpAsianOpenMin,
                          InpAsianCloseHour, InpAsianCloseMin) ||
-      !ConfigureEASession(1, "LONDON", InpTradeLondon, InpLondonOpenHour, InpLondonOpenMin,
+      !ConfigureEASession(1, "LONDON", InpTradeLondon, InpLondonMidpoint, InpLondonOpenHour, InpLondonOpenMin,
                          InpLondonCloseHour, InpLondonCloseMin) ||
-      !ConfigureEASession(2, "NY", InpTradeNY, InpNYOpenHour, InpNYOpenMin,
+      !ConfigureEASession(2, "NY", InpTradeNY, InpNYMidpoint, InpNYOpenHour, InpNYOpenMin,
                          InpNYCloseHour, InpNYCloseMin))
       return INIT_PARAMETERS_INCORRECT;
    g_atr = iATR(_Symbol, PERIOD_M15, InpATRPeriod);
@@ -655,8 +661,8 @@ void ProcessMidpointTriggers(const MqlTick &tick)
       return;
    for(int i = 0; i < ArraySize(g_ranges); i++)
    {
-      if(g_ranges[i].second_attempted || tick.time < g_ranges[i].end ||
-         tick.time >= g_ranges[i].next_session)
+      if(g_ranges[i].second_attempted || !g_sessions[g_ranges[i].session].midpoint ||
+         tick.time < g_ranges[i].end || tick.time >= g_ranges[i].next_session)
          continue;
       ulong first_id;
       bool second_filled, profit_taken;

@@ -60,7 +60,11 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
 
 ### Entry and management
 
-- Asian, London and NY can be enabled independently. Their schedules and
+- Asian, London and NY can be enabled independently (`InpTradeNY` defaults to
+  `false`). Each session also has a midpoint toggle (`InpAsianMidpoint`,
+  `InpLondonMidpoint`, `InpNYMidpoint`, all default `false`); when off, only
+  the high-risk breakout entry is taken for that session. The broker DST
+  default is `BROKER_DST_EUROPE` (UTC+2 winter / UTC+3 summer). Schedules and
   reference timezones match the indicator. The EA requires an **explicit broker
   standard UTC offset and DST rule** in both live trading and backtesting;
   it does not learn offsets from the live clock. For matching visuals, disable
@@ -134,9 +138,13 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
 
 ### Sizing and inputs
 
+`Market_Sessions_EA_best.set` holds the recommended preset (EU DST, NY off,
+midpoint entries off, fixed 0.04 lots). Load it from the EA/tester **Inputs**
+tab via **Load**. It comes from an approximate M1 simulation, not an MT5 test.
+
 Choose `InpSizing = SIZE_EQUITY_PERCENT` or `SIZE_FIXED_LOTS`.
-Percentage sizing defaults to **0.5% of current equity**; fixed size defaults
-to **0.10 lots**. Both are user-adjustable and apply **separately to each
+The default is fixed **0.04 lots** (must split into two valid 50% halves);
+percentage sizing defaults to **0.5% of current equity**. Both are user-adjustable and apply **separately to each
 entry**, not split between them. Combined intended risk can reach twice the
 selected percentage (or twice the selected lots), plus existing sessions'
 remaining exposure. Each risk budget uses equity at its entry request time.
@@ -256,10 +264,10 @@ Monitoring and levels end at the **next session opening** instead.
 - Manual inputs remain as an optional fallback: disable `InpDetectBrokerOffset`,
   set `InpBrokerUTCOffset` to the **standard/non-DST offset in hours** (default
   `2.0`, range -14 to +14; fractional offsets supported), `InpBrokerDSTRule`
-  (default `BROKER_DST_NONE`), and `InpBrokerDSTMinutes` (default 60, range 1–120).
+  (default `BROKER_DST_EUROPE`), and `InpBrokerDSTMinutes` (default 60, range 1–120).
   The strategy tester always uses these inputs because its `TimeGMT()` equals
   simulated server time; it neither reads nor writes live observations.
-  Its default is now fixed UTC+2, rather than the previous European DST preset;
+  Its default is UTC+2 with European DST (UTC+3 in summer);
   select the intended broker rule explicitly when comparing backtests.
   `BROKER_DST_US` switches at New York's UTC transition instants, including for
   GMT+2/+3 brokers; Australia/NZ use local transition times.

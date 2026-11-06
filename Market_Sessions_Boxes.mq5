@@ -14,7 +14,7 @@
 
 input group "Broker Timezone"
 input double        InpBrokerUTCOffset = 2.0; // Standard (winter) UTC offset in hours
-input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_NONE; // Fallback when automatic detection is disabled
+input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_EUROPE; // Fallback when automatic detection is disabled
 input int           InpBrokerDSTMinutes = 60; // Broker clock advance during DST
 input bool          InpDetectBrokerOffset = false; // Automatically measure offset and learn broker DST
 
