@@ -5,6 +5,9 @@
 #include <Trade/Trade.mqh>
 #include "Market_Sessions_Core.mqh"
 
+input group "EA Control"
+input bool InpEnableEA = true; // Enable new entries; existing positions remain managed
+
 enum PositionSizing
 {
    SIZE_EQUITY_PERCENT,
@@ -169,6 +172,8 @@ int OnInit()
          ", DST rule ", (int)InpBrokerDSTRule,
          ". Each entry uses the full risk/lot input; combined risk can be twice the setting.",
          " RSI is display-only. Use a demo account first.");
+   if(!InpEnableEA)
+      Print("EA entries disabled: midpoint orders will be cancelled; existing trades remain managed.");
    return INIT_SUCCEEDED;
 }
 
@@ -431,6 +436,11 @@ bool EntryVolume(const bool buy, const double price, const double stop,
 
 void EnterTrades(const EASessionRange &range, const int direction, const MqlTick &tick)
 {
+   if(!InpEnableEA)
+   {
+      Print(g_sessions[range.session].name, " breakout skipped: EA entries disabled.");
+      return;
+   }
    if(ExternalSymbolOccupied() || HasPendingEAOrder())
    {
       Print(g_sessions[range.session].name,
@@ -544,19 +554,20 @@ void ExpireMidpointOrders()
       datetime expiry = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
       if(expiry == 0 && StringFind(comment, "MSB MID ") == 0)
          expiry = (datetime)StringToInteger(StringSubstr(comment, 8));
-      if(expiry <= 0)
+      if(InpEnableEA && expiry <= 0)
       {
          Warn("Midpoint expiry is missing from broker history; cancellation required.");
          continue;
       }
-      if(TimeTradeServer() < expiry || !TradingAllowed())
+      if((InpEnableEA && TimeTradeServer() < expiry) || !TradingAllowed())
          continue;
       bool sent = g_trade.OrderDelete(ticket);
       if(!sent || g_trade.ResultRetcode() != TRADE_RETCODE_DONE)
          Warn(StringFormat("Expired midpoint cancellation failed: %u %s",
                            g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
       else
-         Print("Expired midpoint order cancelled: ", ticket);
+         Print(InpEnableEA ? "Expired midpoint order cancelled: " :
+                            "Disabled EA midpoint order cancelled: ", ticket);
    }
 }
 

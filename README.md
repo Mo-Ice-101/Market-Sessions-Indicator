@@ -22,6 +22,29 @@ Copy the EA and `Market_Sessions_Core.mqh` together into `MQL5/Experts`, then
 compile the EA with F7. Run it in Strategy Tester and on a demo account before
 enabling live algorithmic trading.
 
+### Enable or disable EA entries
+
+`InpEnableEA` defaults to **true**. Set it to **false** to block new market
+and midpoint entries and cancel this EA's unfilled midpoint orders on the
+next tick/timer event. Cancellation requires connectivity and algorithmic
+trading permission; rejected cancellations are logged and retried.
+Existing filled positions continue their independent 2R exits, break-even
+and ATR trailing for safety, even while entries are disabled.
+For indicator-only use with no EA management, attach only
+`Market_Sessions_Boxes.mq5`; the indicator never places trades.
+
+### Sync the MQL5 source locally
+
+```sh
+git clone --branch feat/opening-range-hedging-ea https://github.com/Mo-Ice-101/Market-Sessions-Indicator.git
+```
+
+For an existing checkout on this branch, use `git pull --ff-only`.
+Copy `Market_Sessions_Boxes.mq5` and `Market_Sessions_Core.mqh` together into
+`MQL5/Indicators`, and `Market_Sessions_EA.mq5` and the header together into
+`MQL5/Experts`. Recopy after pulling updates, then compile both `.mq5` files
+in MetaEditor with F7. Git pull alone does not update the terminal folders.
+
 ### Entry and management
 
 - Asian, London and NY can be enabled independently. Their schedules and
@@ -131,6 +154,9 @@ Use **Every tick based on real ticks** in Strategy Tester where available:
 3. Test risk and fixed-lot modes, coarse volume steps, insufficient equity,
    odd-step fixed lots, spread limits, insufficient margin, disabled trading
    and broker stop/freeze rejection. Rejections must be visible in the log.
+   With `InpEnableEA=false`, verify no new entries, pending midpoint
+   cancellation and continued management of existing trades. Re-enable and
+   verify disabled-period signals are not replayed.
 4. On a demo hedging account, restart before and after each entry's half-close,
    including after a stop move; verify recovered R and no duplicate scale-out.
    Verify a netting account is rejected. Check independent old/new-session
