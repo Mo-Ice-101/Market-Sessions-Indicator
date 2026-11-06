@@ -1,5 +1,5 @@
 #property strict
-#property version "1.04"
+#property version "1.05"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
@@ -27,6 +27,7 @@ input int    InpMaxSpreadPoints = 0; // 0 disables the entry spread filter
 
 input group "Stops and ATR Management (completed M15 candles)"
 input double InpStopBufferPoints = 10.0; // Beyond the opposite opening-range boundary
+input double InpBreakEvenR = 1.0; // Move stop to entry after M1 close at this R; 0 disables early BE
 input int    InpATRPeriod = 14;
 input double InpTrailingATR = 2.0;
 
@@ -163,6 +164,7 @@ int OnInit()
 {
    if(!MathIsValidNumber(InpRiskPercent) || !MathIsValidNumber(InpFixedLots) ||
       !MathIsValidNumber(InpStopBufferPoints) || !MathIsValidNumber(InpTrailingATR) ||
+      !MathIsValidNumber(InpBreakEvenR) || InpBreakEvenR < 0 ||
       !MathIsValidNumber(InpBrokerUTCOffset) ||
       InpSizing < SIZE_EQUITY_PERCENT || InpSizing > SIZE_FIXED_LOTS ||
       (InpSizing == SIZE_EQUITY_PERCENT && (InpRiskPercent <= 0 || InpRiskPercent > 100)) ||
@@ -175,7 +177,7 @@ int OnInit()
       InpDaysToMonitor < 1 || InpDaysToMonitor > 30 ||
       InpBoxTransparency < 0 || InpBoxTransparency > 100)
    {
-      Print("Invalid sizing, ATR, magic, spread, timezone or monitoring inputs.");
+      Print("Invalid sizing, break-even, ATR, magic, spread, timezone or monitoring inputs.");
       return INIT_PARAMETERS_INCORRECT;
    }
    if(AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
@@ -909,24 +911,45 @@ void ManagePositions(const MqlTick &tick)
       double profit_distance = buy ? market - entry : entry - market;
       if(scaled < target_volume - step * 1e-6)
       {
-         if(!ArmScaleOut(identifier, scaled > step * 1e-6 || profit_distance >= 2 * risk))
-            continue;
-         double remaining = FloorVolume(target_volume - scaled, step);
-         if(remaining < minimum || current_volume - remaining < minimum)
+         if(ArmScaleOut(identifier, scaled > step * 1e-6 || profit_distance >= 2 * risk))
          {
-            Warn("Broker partial fill left an invalid remainder for the 50% scale-out.");
+            double remaining = FloorVolume(target_volume - scaled, step);
+            if(remaining < minimum || current_volume - remaining < minimum)
+            {
+               Warn("Broker partial fill left an invalid remainder for the 50% scale-out.");
+               continue;
+            }
+            if(!TradingAllowed() || !PositionSelectByTicket(ticket))
+               continue;
+            if(!ClosePartial(ticket, buy, remaining, tick))
+               continue;
+            if(!PositionSelectByTicket(ticket) ||
+               !PositionHistory(identifier, buy, entry, risk, original_volume, scaled) ||
+               scaled < target_volume - step * 1e-6)
+               continue;
+            old_stop = PositionGetDouble(POSITION_SL);
+            tp = PositionGetDouble(POSITION_TP);
+         }
+      }
+      bool scale_complete = scaled >= target_volume - step * 1e-6;
+      if(!scale_complete)
+      {
+         if(InpBreakEvenR == 0)
+            continue;
+         MqlRates completed[];
+         if(CopyRates(_Symbol, PERIOD_M1, 1, 1, completed) != 1)
+         {
+            Warn("Cannot read completed M1 candle for early break-even; retrying.");
             continue;
          }
-         if(!TradingAllowed() || !PositionSelectByTicket(ticket))
+         if(completed[0].time + PeriodSeconds(PERIOD_M1) <=
+            (datetime)PositionGetInteger(POSITION_TIME))
             continue;
-         if(!ClosePartial(ticket, buy, remaining, tick))
+         double close_price = completed[0].close +
+                              (buy ? 0 : completed[0].spread * _Point);
+         double closed_gain = buy ? close_price - entry : entry - close_price;
+         if(closed_gain < InpBreakEvenR * risk)
             continue;
-         if(!PositionSelectByTicket(ticket) ||
-            !PositionHistory(identifier, buy, entry, risk, original_volume, scaled) ||
-            scaled < target_volume - step * 1e-6)
-            continue;
-         old_stop = PositionGetDouble(POSITION_SL);
-         tp = PositionGetDouble(POSITION_TP);
       }
       if(!TradingAllowed())
          continue;
@@ -934,7 +957,7 @@ void ManagePositions(const MqlTick &tick)
       double breakeven = StopPrice(entry, tick_size, !buy);
       double stop = breakeven;
       double atr;
-      if(ReadATR(atr))
+      if(scale_complete && ReadATR(atr))
       {
          double trail = StopPrice(market + (buy ? -1 : 1) * InpTrailingATR * atr,
                                   tick_size, buy);

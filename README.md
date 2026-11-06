@@ -111,7 +111,11 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   entry or an ATR initial stop. Prices round outward to tradable ticks.
   Broker stop-distance violations reject the pair rather than widen the stop.
 - **R** is actual filled entry price minus the original protective stop distance
-  (the reverse for sells). At **2R**, measured using executable bid for buys
+  (the reverse for sells). By default, a completed **M1 close at +1R** moves
+  the stop to entry, subject to broker restrictions and current executable
+  price. Sell confirmation adds the completed candle's spread to its bid close.
+  `InpBreakEvenR` adjusts this threshold; `0` disables early break-even.
+  At **2R**, measured using executable bid for buys
   and ask for sells, the EA closes **50% of the original filled volume**.
   It then moves the remaining stop to entry or better and trails it at
   **2 × the latest completed M15 ATR(14)**. There is no fixed final take profit.
