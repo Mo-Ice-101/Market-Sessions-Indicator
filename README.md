@@ -82,12 +82,26 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   or slippage. Rejected second-entry requests are consumed until restart.
   Broker history prevents another second entry after a fill.
   "Medium risk" describes entry style, not lower sizing.
+- **15M reversal strategy** (`InpEnableM15Reversal`, default `false`) optionally
+  permits one opposite market entry after the first breakout position fully
+  closes, including after profit or loss. A completed M15 close must be strictly
+  beyond the opposite opening-range boundary, after the first position's exit
+  and before the next scheduled session opens. Initial entries remain M5-based.
+  This option intentionally overrides the profit lock for the reversal only.
+  If a midpoint entry has already filled, no reversal is allowed (maximum two
+  entries per opening range). Reversals never create midpoint entries and use
+  the same sizing, range stop, +1R break-even, 2R half-close and ATR trailing.
+  Filled reversal entries are recovered from broker history after restart;
+  historical signals are not replayed. A rejected reversal attempt is consumed
+  for the current run. Disabling the option blocks new reversals but leaves
+  existing positions managed.
 - A **hedging account is required**. Earlier sessions' EA positions do not
   block new opening-range pairs: every entry keeps its own original R, 2R exit
   and ATR trail across all later sessions. Manual/other-EA exposure on the
   symbol and unresolved immediate market requests block new pairs.
   Simultaneous signals use reference-date order, then Asian/London/NY order.
-- **Taking profit ends new entries for that session**, including a profitable
+- **Taking profit ends new entries for that session** (except an explicitly
+  enabled 15M reversal), including a profitable
   2R partial exit or any profitable stop/manual exit. Profit means an exit deal
   with positive `DEAL_PROFIT` before fees. Broker history recovers this lock
   after restart. Already-filled positions keep their own exit management.

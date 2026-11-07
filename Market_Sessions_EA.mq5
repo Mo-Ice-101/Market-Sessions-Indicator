@@ -1,5 +1,5 @@
 #property strict
-#property version "1.05"
+#property version "1.06"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
@@ -10,6 +10,7 @@ input group "EA Control"
 input bool InpEnableEA = true; // Enable new entries; existing positions remain managed
 input bool InpShowSessionBoxes = true; // Automatically attach matching indicator on chart
 input int  InpBoxTransparency = 85; // Fill transparency 0-100; borders/levels stay visible
+input bool InpEnableM15Reversal = false; // 15M reversal strategy: one opposite entry after first closes, even after profit
 
 enum PositionSizing
 {
@@ -82,6 +83,7 @@ struct EASessionRange
    bool loaded;
    bool evaluated;
    bool second_attempted;
+   bool reversal_attempted;
 };
 
 CTrade g_trade;
@@ -544,7 +546,8 @@ bool SessionTradeState(const EASessionRange &range, ulong &first_id,
    return true;
 }
 
-void EnterTrades(const EASessionRange &range, const int direction, const MqlTick &tick)
+void EnterTrades(const EASessionRange &range, const int direction, const MqlTick &tick,
+                 const bool reversal = false)
 {
    if(!InpEnableEA)
    {
@@ -562,7 +565,8 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
    ulong first_id;
    bool second_filled, profit_taken;
    if(!SessionTradeState(range, first_id, second_filled, profit_taken) ||
-      first_id != 0 || second_filled || profit_taken)
+      (!reversal && (first_id != 0 || second_filled || profit_taken)) ||
+      (reversal && (first_id == 0 || second_filled)))
    {
       Print("Session entry skipped: already traded, profit locked or history unavailable.");
       return;
@@ -579,6 +583,7 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
       return;
    }
    bool buy = direction > 0;
+   bool allow_midpoint = !reversal && g_sessions[range.session].midpoint;
    double price = buy ? tick.ask : tick.bid;
    double stop = StopPrice((buy ? range.low : range.high) +
                            (buy ? -1 : 1) * InpStopBufferPoints * _Point, tick_size, buy);
@@ -586,18 +591,19 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
    double minimum_distance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
    if(stop <= 0 || midpoint <= 0 ||
       (buy ? tick.bid - stop : stop - tick.ask) < minimum_distance ||
-      (buy ? midpoint - stop : stop - midpoint) < minimum_distance ||
-      (buy ? tick.ask - midpoint : midpoint - tick.bid) < minimum_distance ||
-      (buy ? stop >= tick.bid || midpoint >= tick.ask : stop <= tick.ask || midpoint <= tick.bid) ||
+      (allow_midpoint && ((buy ? midpoint - stop : stop - midpoint) < minimum_distance ||
+       (buy ? tick.ask - midpoint : midpoint - tick.bid) < minimum_distance ||
+       (buy ? midpoint >= tick.ask : midpoint <= tick.bid))) ||
+      (buy ? stop >= tick.bid : stop <= tick.ask) ||
       range.next_session <= tick.time)
    {
       Print("Breakout pair skipped: range stop/midpoint violates broker price distance or has expired.");
       return;
    }
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double market_volume, limit_volume;
+   double market_volume, limit_volume = 0;
    if(!EntryVolume(buy, price, stop, equity, true, market_volume) ||
-      !EntryVolume(buy, midpoint, stop, equity, false, limit_volume))
+      (allow_midpoint && !EntryVolume(buy, midpoint, stop, equity, false, limit_volume)))
       return;
    double limit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
    if(limit > 0 &&
@@ -607,24 +613,124 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
       return;
    }
    ENUM_ORDER_TYPE type = buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   double market_margin, limit_margin;
+   double market_margin, limit_margin = 0;
    if(!OrderCalcMargin(type, _Symbol, market_volume, price, market_margin) ||
-      !OrderCalcMargin(type, _Symbol, limit_volume, midpoint, limit_margin) ||
+      (allow_midpoint && !OrderCalcMargin(type, _Symbol, limit_volume, midpoint, limit_margin)) ||
       market_margin + limit_margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
    {
       Print("Breakout pair skipped: insufficient margin or margin calculation failed. Error: ", GetLastError());
       return;
    }
-   string comment = SessionEntryComment(range.start, false);
+   string comment = reversal ? "MSBR " + IntegerToString((long)range.start) :
+                               SessionEntryComment(range.start, false);
    bool sent = buy ? g_trade.Buy(market_volume, _Symbol, 0, stop, 0, comment) :
                      g_trade.Sell(market_volume, _Symbol, 0, stop, 0, comment);
-   if(!TradeResult(sent, "High-risk breakout entry"))
+   if(!TradeResult(sent, reversal ? "M15 reversal entry" : "High-risk breakout entry"))
    {
-      Print("Midpoint entry not submitted because the market entry was not confirmed filled.");
+      Print("Market entry was not confirmed filled; no follow-up entry submitted.");
       return;
    }
    Print(comment, " entry filled. Volume=", g_trade.ResultVolume(), ", SL=", stop);
-   Print("Midpoint trigger armed only while first trade is open in drawdown and session has no profit.");
+   if(!reversal && g_sessions[range.session].midpoint)
+      Print("Midpoint trigger armed only while first trade is open in drawdown and session has no profit.");
+}
+
+void ProcessM15Reversals(const MqlTick &tick)
+{
+   if(!InpEnableEA || !InpEnableM15Reversal || !RebuildRanges(tick.time))
+      return;
+   MqlRates completed[];
+   if(CopyRates(_Symbol, PERIOD_M15, 1, 1, completed) != 1 ||
+      !SeriesInfoInteger(_Symbol, PERIOD_M15, SERIES_SYNCHRONIZED))
+   {
+      Warn("Completed M15 candle unavailable for reversal; retrying.");
+      return;
+   }
+   datetime closed = completed[0].time + PeriodSeconds(PERIOD_M15);
+   if(closed <= g_start_bar || iTime(_Symbol, PERIOD_M15, 0) != closed)
+      return;
+   for(int i = 0; i < ArraySize(g_ranges); i++)
+   {
+      if(g_ranges[i].reversal_attempted || closed <= g_ranges[i].end ||
+         tick.time >= g_ranges[i].next_session)
+         continue;
+      ulong first_id;
+      bool second_filled, profit_taken;
+      if(!SessionTradeState(g_ranges[i], first_id, second_filled, profit_taken))
+         continue;
+      if(first_id == 0)
+         continue;
+      if(second_filled)
+      {
+         g_ranges[i].reversal_attempted = true;
+         continue;
+      }
+      string comment = "MSBR " + IntegerToString((long)g_ranges[i].start);
+      bool reversal_filled = false;
+      for(int d = 0; d < HistoryDealsTotal(); d++)
+      {
+         ulong deal = HistoryDealGetTicket(d);
+         if(HistoryDealGetString(deal, DEAL_SYMBOL) != _Symbol ||
+            (ulong)HistoryDealGetInteger(deal, DEAL_MAGIC) != InpMagic ||
+            HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN)
+            continue;
+         ulong order = (ulong)HistoryDealGetInteger(deal, DEAL_ORDER);
+         if(HistoryDealGetString(deal, DEAL_COMMENT) == comment ||
+            HistoryOrderGetString(order, ORDER_COMMENT) == comment)
+            reversal_filled = true;
+      }
+      if(reversal_filled)
+      {
+         g_ranges[i].reversal_attempted = true;
+         continue;
+      }
+      bool first_open = false;
+      for(int p = PositionsTotal() - 1; p >= 0; p--)
+         if(PositionGetTicket(p) != 0 &&
+            (ulong)PositionGetInteger(POSITION_IDENTIFIER) == first_id)
+            first_open = true;
+      if(first_open)
+         continue;
+      if(!HistorySelectByPosition(first_id))
+      {
+         Warn("Cannot recover first position history for reversal; retrying.");
+         continue;
+      }
+      int original_direction = 0;
+      datetime exit_time = 0;
+      for(int d = 0; d < HistoryDealsTotal(); d++)
+      {
+         ulong deal = HistoryDealGetTicket(d);
+         long leg = HistoryDealGetInteger(deal, DEAL_ENTRY);
+         if(leg == DEAL_ENTRY_IN)
+            original_direction = HistoryDealGetInteger(deal, DEAL_TYPE) == DEAL_TYPE_BUY ? 1 : -1;
+         if(leg == DEAL_ENTRY_OUT || leg == DEAL_ENTRY_OUT_BY)
+         {
+            datetime deal_time = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
+            if(deal_time > exit_time)
+               exit_time = deal_time;
+         }
+      }
+      if(original_direction == 0 || exit_time == 0 || closed <= exit_time)
+         continue;
+      if(!g_ranges[i].loaded)
+      {
+         if(!LoadOpeningRange(_Symbol, g_ranges[i].start, tick.time,
+                              g_ranges[i].high, g_ranges[i].low))
+         {
+            Warn("Opening range unavailable for reversal; retrying.");
+            continue;
+         }
+         g_ranges[i].loaded = true;
+      }
+      bool opposite_break = original_direction > 0 ?
+                            completed[0].close < g_ranges[i].low :
+                            completed[0].close > g_ranges[i].high;
+      if(!opposite_break)
+         continue;
+      g_ranges[i].reversal_attempted = true;
+      EnterTrades(g_ranges[i], -original_direction, tick, true);
+   }
 }
 
 bool CancelLegacyMidpointOrders()
@@ -1084,4 +1190,5 @@ void OnTick()
    }
    if(current_bar > g_start_bar && current_bar != g_last_signal_bar)
       ProcessSignals(current_bar, tick);
+   ProcessM15Reversals(tick);
 }
