@@ -196,7 +196,8 @@ class MT5Tests(unittest.TestCase):
 
         module.copy_rates_from_pos = rates
         module.shutdown = lambda: shutdown.append(True)
-        args = argparse.Namespace(gold_symbol="gold", usd_symbol="USD", usd_inverse=False)
+        args = argparse.Namespace(gold_symbol="gold", usd_symbol="USD", usd_inverse=False,
+                                  mt5_path=None)
         with patch.dict("sys.modules", {"MetaTrader5": module}):
             result = agent.read_market(args, NOW)
         self.assertEqual(result["relationship"], "inverse")
@@ -208,11 +209,28 @@ class MT5Tests(unittest.TestCase):
         module.symbol_select = lambda *_: False
         shutdown = []
         module.shutdown = lambda: shutdown.append(True)
-        args = argparse.Namespace(gold_symbol="missing", usd_symbol="USD", usd_inverse=False)
+        args = argparse.Namespace(gold_symbol="missing", usd_symbol="USD", usd_inverse=False,
+                                  mt5_path=None)
         with patch.dict("sys.modules", {"MetaTrader5": module}):
             with self.assertRaisesRegex(RuntimeError, "cannot select missing"):
                 agent.read_market(args, NOW)
         self.assertEqual(shutdown, [True])
+
+    def test_explicit_terminal_used_for_scan(self):
+        module = self.module()
+        from unittest.mock import Mock
+        module.initialize = Mock(return_value=True)
+        g, d = prices()
+        bars = iter((g, d))
+        module.copy_rates_from_pos = lambda *_: [
+            {"time": stamp, "close": close} for stamp, close in next(bars).items()
+        ]
+        path = r"C:\Program Files\Weltrade MT5 Demo\terminal64.exe"
+        args = argparse.Namespace(gold_symbol="gold", usd_symbol="USD", usd_inverse=False,
+                                  mt5_path=path)
+        with patch.dict("sys.modules", {"MetaTrader5": module}):
+            agent.read_market(args, NOW)
+        module.initialize.assert_called_once_with(path)
 
 
 class PersistenceTests(unittest.TestCase):

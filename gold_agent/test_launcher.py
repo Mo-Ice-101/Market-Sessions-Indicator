@@ -15,6 +15,10 @@ class LauncherTests(unittest.TestCase):
     def test_gold_symbol_matches_broker(self):
         self.assertEqual(launcher.GOLD_SYMBOL, "XAUUSD_i")
 
+    def test_terminal_path_matches_requested_installation(self):
+        self.assertEqual(str(launcher.MT5_PATH),
+                         r"C:\Program Files\Weltrade MT5 Demo\terminal64.exe")
+
     def test_valid_settings(self):
         self.assertEqual(launcher.validate_settings(self.settings()), self.settings())
 

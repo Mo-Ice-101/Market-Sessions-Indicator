@@ -11,6 +11,10 @@ price predictions. It runs independently; its reports are not drawn on the MT5 c
 Open MT5 and log into your broker, then double-click **`Start_Gold_Agent.cmd`**
 in this folder. It creates the Python environment if missing, installs the MT5
 connector only when its import fails, and presets gold to **`XAUUSD_i`**.
+Startup and every scan use the explicit terminal
+`C:\Program Files\Weltrade MT5 Demo\terminal64.exe`, avoiding automatic selection
+when multiple MT5 installations are present. Keep that terminal logged in.
+If it moves, update `MT5_PATH` in `launcher.py`; a missing executable stops startup.
 On first run, choose your exact USD comparison symbol and its orientation.
 The choices and local model name are saved in git-ignored `data/startup.json`;
 remove that file to reconfigure. No broker credentials are saved.
@@ -68,6 +72,9 @@ gold_agent\.venv\Scripts\python.exe gold_agent\agent.py --gold-symbol "XAUUSD.i"
 strength **relative to EUR**, not against all currencies. It must not be used
 with DXY or a USD-base pair such as USDJPY. EUR-specific news can distort this
 proxy. Symbol suffixes must match your broker.
+For manual commands with multiple installations, also pass
+`--mt5-path "C:\Program Files\Weltrade MT5 Demo\terminal64.exe"`.
+Without this argument, manual mode uses MT5's automatic terminal selection.
 
 Omit `--once` to monitor continuously. Scans run every 900 seconds **after the
 previous scan finishes**, configurable with `--interval` (minimum 300).

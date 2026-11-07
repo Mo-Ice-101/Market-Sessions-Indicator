@@ -262,7 +262,8 @@ def read_market(args, now):
         import MetaTrader5 as mt5
     except ImportError as exc:
         raise RuntimeError("Install requirements on Windows with MT5 available") from exc
-    if not mt5.initialize():
+    connected = mt5.initialize(args.mt5_path) if args.mt5_path else mt5.initialize()
+    if not connected:
         raise RuntimeError(f"MT5 initialization failed: {mt5.last_error()}")
     try:
         prices = []
@@ -398,6 +399,7 @@ def scan(args):
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gold-symbol", required=True, help="Exact broker symbol, e.g. XAUUSD.i")
+    parser.add_argument("--mt5-path", help="Full path to the intended MT5 terminal64.exe")
     parser.add_argument("--usd-symbol", required=True, help="USD index or USD-quoted FX pair")
     parser.add_argument("--usd-inverse", action="store_true",
                         help="Invert FX returns for EURUSD/GBPUSD; NOT a true dollar index")
@@ -412,6 +414,8 @@ def arguments():
         parser.error("interval >= 300, lookback-hours 1-72, max-headlines 1-100 required")
     if args.gold_symbol == args.usd_symbol:
         parser.error("Gold and USD comparison symbols must differ")
+    if args.mt5_path and not Path(args.mt5_path).is_file():
+        parser.error("mt5-path must point to an existing terminal executable")
     return args
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 HOME = Path(__file__).resolve().parent
 GOLD_SYMBOL = "XAUUSD_i"
+MT5_PATH = Path(r"C:\Program Files\Weltrade MT5 Demo\terminal64.exe")
 
 
 def validate_settings(settings):
@@ -133,8 +134,10 @@ def run():
             msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as exc:
             raise RuntimeError("Another launcher is already running; use its window") from exc
-        print("Connecting to MT5. Keep your broker terminal logged in.")
-        if not mt5.initialize():
+        if not MT5_PATH.is_file():
+            raise RuntimeError(f"MT5 executable not found: {MT5_PATH}. Check MT5_PATH in launcher.py.")
+        print(f"Connecting to {MT5_PATH}. Keep this broker terminal logged in.")
+        if not mt5.initialize(str(MT5_PATH)):
             raise RuntimeError(f"Cannot connect to MT5: {mt5.last_error()}")
         try:
             if not mt5.symbol_select(GOLD_SYMBOL, True):
@@ -174,6 +177,7 @@ def run():
                     sys.executable, str(HOME / "agent.py"), "--gold-symbol", GOLD_SYMBOL,
                     "--usd-symbol", settings["usd_symbol"], "--ollama-model", settings["model"],
                     "--output", str(output),
+                    "--mt5-path", str(MT5_PATH),
                 ]
                 if settings["usd_inverse"]:
                     command.append("--usd-inverse")
