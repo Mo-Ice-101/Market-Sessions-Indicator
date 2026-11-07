@@ -15,7 +15,7 @@ py -3.11 -m venv ".venv"
 if errorlevel 1 goto failed
 
 :dependencies
-".venv\Scripts\python.exe" -c "import MetaTrader5, streamlit"
+".venv\Scripts\python.exe" -c "import MetaTrader5, streamlit, tzdata"
 if not errorlevel 1 goto start
 echo Installing the missing MT5 connector...
 ".venv\Scripts\python.exe" -m pip install -r "requirements.txt"
