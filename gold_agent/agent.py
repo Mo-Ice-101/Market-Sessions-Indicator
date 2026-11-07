@@ -41,6 +41,7 @@ SESSION_ZONES = {
     "New York": ZoneInfo("America/New_York"),
 }
 SESSION_ENABLED = {"Asian": True, "London": True, "New York": False}
+ANALYSIS_ENABLED = {"Asian": True, "London": True, "New York": True}
 
 
 def utc_now():
@@ -48,7 +49,7 @@ def utc_now():
 
 
 def trading_session(now):
-    """Return whether the EA currently permits a fresh entry after its M15 range forms."""
+    """Return Desk analysis eligibility separately from the EA's entry switches."""
     now = now.astimezone(UTC)
     events = []
     for day_offset in range(-2, 3):
@@ -79,14 +80,15 @@ def trading_session(now):
         "active": False, "session": name, "session_open_utc": opened.isoformat(),
         "entry_window_start_utc": start.isoformat(), "next_session_open_utc": following.isoformat(),
         "enabled": SESSION_ENABLED[name],
+        "analysis_enabled": ANALYSIS_ENABLED[name],
     }
-    if not SESSION_ENABLED[name]:
-        window["reason"] = f"{name} entries are disabled in the EA preset"
+    if not ANALYSIS_ENABLED[name]:
+        window["reason"] = f"{name} analysis is disabled in the Desk"
     elif now < start:
         window["reason"] = "Waiting for the first full M15 opening-range candle to close"
     else:
         window["active"] = True
-        window["reason"] = "Within the EA's new-entry window"
+        window["reason"] = "Within the Desk's session analysis window"
     return window
 
 
@@ -610,7 +612,7 @@ def scan(args):
             evidence["ai"] = {"status": "outside_ea_window", "note": session["reason"]}
         else:
             evidence["ai"] = {"status": "insufficient_market_data",
-                              "note": "The EA window is open, but gold/USD data is stale or unavailable."}
+                              "note": "The Desk analysis window is open, but gold/USD data is stale or unavailable."}
         forecast_recorded = record_forecast(
             db, evidence, gold_closes, now, session.get("session") or "unknown"
         )

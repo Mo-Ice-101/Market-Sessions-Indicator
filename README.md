@@ -10,7 +10,8 @@ It includes a local web dashboard with source-linked reports and a prospective
 one-hour forecast evaluation. It flags conflicting signals or missing data and
 does not place trades or change the indicator. Historical AI performance is not
 available until timestamped forecasts have been collected and scored.
-AI evaluations follow the EA preset's enabled Asian and London entry windows;
+AI evaluations use the preset's Asian, London and New York opening schedule.
+New York analysis is enabled for manual use without enabling EA New York trades;
 headline collection continues throughout the day.
 
 ## Installation

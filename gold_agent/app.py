@@ -84,9 +84,9 @@ def display_report(report):
     elif ai.get("status") == "disabled":
         st.info("AI analysis is disabled.")
     elif ai.get("status") == "outside_ea_window":
-        st.info("Outside the EA's Asian/London entry windows. News and market data still refresh; AI prediction runs during eligible windows.")
+        st.info("Outside the Desk's Asian/London/New York analysis windows. News and market data still refresh; AI prediction runs after the opening M15 candle closes.")
     elif ai.get("status") == "insufficient_market_data":
-        st.warning("EA entry window is open, but fresh market prices are unavailable, so no prediction was made.")
+        st.warning("Desk analysis window is open, but fresh market prices are unavailable, so no prediction was made.")
     if ai_result.get("summary"):
         st.write(ai_result["summary"])
     for caveat in ai_result.get("caveats", []):
@@ -114,9 +114,10 @@ def display_report(report):
     )
     session = report.get("ea_session", {})
     if session.get("session"):
-        state = "entry window active" if session.get("active") else session.get("reason", "inactive")
+        state = "analysis window active" if session.get("active") else session.get("reason", "inactive")
+        ea_state = "enabled in preset" if session.get("enabled") else "disabled in preset"
         st.caption(
-            f"EA schedule: {session['session']} · {state} · "
+            f"Desk schedule: {session['session']} · {state} · EA entries {ea_state} · "
             f"window starts {session.get('entry_window_start_utc', '—')} UTC · "
             f"next scheduled opening {session.get('next_session_open_utc', '—')} UTC."
         )
@@ -202,7 +203,7 @@ def display_forecast_test(rows, error):
         table.append({
             "Forecast time (UTC)": created,
             "AI view": "Gold up" if direction == "up" else "Gold down",
-            "EA session": session,
+            "Desk session": session,
             "Evidence confidence": confidence,
             "Model": model,
             "Gold baseline": round(baseline, 3),

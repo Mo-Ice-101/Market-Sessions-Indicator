@@ -39,23 +39,38 @@ class MarketTests(unittest.TestCase):
         self.assertTrue(active["active"])
         self.assertEqual(active["next_session_open_utc"], "2026-01-14T09:00:00+00:00")
 
-    def test_ea_london_and_disabled_new_york_windows_in_winter(self):
+    def test_new_york_analysis_enabled_without_enabling_ea_entries_in_winter(self):
         london = agent.trading_session(datetime(2026, 1, 13, 9, 20, tzinfo=agent.UTC))
         self.assertTrue(london["active"])
         self.assertEqual(london["session"], "London")
         self.assertEqual(london["next_session_open_utc"], "2026-01-13T13:30:00+00:00")
         ny = agent.trading_session(datetime(2026, 1, 13, 13, 50, tzinfo=agent.UTC))
         self.assertEqual(ny["session"], "New York")
-        self.assertFalse(ny["active"])
-        self.assertIn("disabled", ny["reason"])
+        self.assertTrue(ny["active"])
+        self.assertTrue(ny["analysis_enabled"])
+        self.assertFalse(ny["enabled"])
+        self.assertEqual(ny["entry_window_start_utc"], "2026-01-13T13:45:00+00:00")
+        self.assertEqual(ny["next_session_open_utc"], "2026-01-13T23:00:00+00:00")
 
     def test_ea_london_and_new_york_opens_follow_daylight_saving(self):
         london = agent.trading_session(datetime(2026, 7, 1, 8, 20, tzinfo=agent.UTC))
         self.assertTrue(london["active"])
         self.assertEqual(london["next_session_open_utc"], "2026-07-01T12:30:00+00:00")
         ny = agent.trading_session(datetime(2026, 7, 1, 12, 50, tzinfo=agent.UTC))
-        self.assertFalse(ny["active"])
+        self.assertTrue(ny["active"])
+        self.assertFalse(ny["enabled"])
         self.assertEqual(ny["session"], "New York")
+        self.assertEqual(ny["entry_window_start_utc"], "2026-07-01T12:45:00+00:00")
+
+    def test_new_york_analysis_waits_for_m15_and_ends_at_asian_open(self):
+        wait = agent.trading_session(datetime(2026, 1, 13, 13, 44, tzinfo=agent.UTC))
+        self.assertFalse(wait["active"])
+        self.assertEqual(wait["session"], "New York")
+        ready = agent.trading_session(datetime(2026, 1, 13, 13, 45, tzinfo=agent.UTC))
+        self.assertTrue(ready["active"])
+        end = agent.trading_session(datetime(2026, 1, 13, 23, 0, tzinfo=agent.UTC))
+        self.assertEqual(end["session"], "Asian")
+        self.assertFalse(end["active"])
 
     def test_inverse_returns(self):
         context = agent.market_context(*prices(), NOW.timestamp())
@@ -322,6 +337,31 @@ class MT5Tests(unittest.TestCase):
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_new_york_scan_runs_ai_and_records_session_forecast(self):
+        ny_time = datetime(2026, 1, 13, 14, 0, tzinfo=agent.UTC)
+        bar_open = int(ny_time.timestamp()) - 300
+        market = {
+            "status": "ok",
+            "latest_completed_bar_utc": datetime.fromtimestamp(bar_open, agent.UTC).isoformat(),
+            "_gold_closes": [(bar_open, 2000.0)],
+        }
+        ai = {"status": "ok", "model": "local-model",
+              "result": {"assessment": "supportive", "confidence": "medium"}}
+        with tempfile.TemporaryDirectory() as folder:
+            args = argparse.Namespace(output=Path(folder), lookback_hours=24,
+                                      max_headlines=10, ollama_model="local-model")
+            with patch.object(agent, "utc_now", return_value=ny_time), \
+                    patch.object(agent, "collect_news", return_value=([], {})), \
+                    patch.object(agent, "real_yields", return_value={"status": "ok"}), \
+                    patch.object(agent, "read_market", return_value=market), \
+                    patch.object(agent, "local_analysis", return_value=ai) as analyze:
+                result = agent.scan(args)
+            analyze.assert_called_once()
+            self.assertTrue(result["forecast_test"]["new_directional_forecast_recorded"])
+            self.assertFalse(result["ea_session"]["enabled"])
+            with sqlite3.connect(Path(folder) / "state.sqlite3") as db:
+                self.assertEqual(db.execute("SELECT session FROM forecasts").fetchone()[0], "New York")
+
     def test_forecast_is_saved_and_only_scored_after_one_hour(self):
         baseline_open = int(NOW.timestamp()) - 300
         evidence = {
