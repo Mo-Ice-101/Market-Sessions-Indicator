@@ -6,6 +6,29 @@ price predictions. It runs independently; its reports are not drawn on the MT5 c
 
 ## Setup on Windows
 
+### Double-click startup (Python 3.11)
+
+Open MT5 and log into your broker, then double-click **`Start_Gold_Agent.cmd`**
+in this folder. It creates the Python environment if missing, installs the MT5
+connector only when its import fails, and presets gold to **`XAUUSD_i`**.
+On first run, choose your exact USD comparison symbol and its orientation.
+The choices and local model name are saved in git-ignored `data/startup.json`;
+remove that file to reconfigure. No broker credentials are saved.
+
+Install Ollama from https://ollama.com/download/windows first. The launcher
+starts its local server if needed and verifies it responds. If the chosen
+local model is missing, it asks permission to download it (potentially several
+GB); declining stops startup, rather than silently disabling AI. The default
+model is `qwen2.5:7b`; choose a smaller local model if your hardware requires it.
+Keep the console open for continuous monitoring; Ctrl+C stops it.
+An Ollama server started by the launcher is stopped when it exits; an already
+running server is left untouched. Startup logs are in `data/ollama-startup.log`.
+Only one launcher can run per data folder. Do not also run a manual monitor
+against the same output folder. Ollama responsiveness/model checks do not
+verify inference quality; check the first report's AI status and reasoning.
+
+### Manual setup
+
 Install Python 3.10+ (64-bit) and MT5. Open MT5, log into your broker, and enable
 the exact gold and dollar comparison symbols in Market Watch. Let M5 history load.
 Run the commands below in PowerShell from the repository root:
