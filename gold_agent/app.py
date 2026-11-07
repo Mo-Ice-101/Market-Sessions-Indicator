@@ -53,7 +53,7 @@ def load_forecasts():
                 return [], "Forecast logging starts with the latest agent version."
             rows = db.execute(
                 """SELECT created_utc, direction, confidence, model, baseline_price,
-                          target_price, actual_return_percent, correct, target_utc, outcome_status
+                          target_price, actual_return_percent, correct, target_utc, outcome_status, session
                    FROM forecasts ORDER BY id DESC LIMIT 1000"""
             ).fetchall()
         return rows, None
@@ -83,6 +83,10 @@ def display_report(report):
         st.error(f"AI analysis failed: {ai.get('error', 'unknown error')}")
     elif ai.get("status") == "disabled":
         st.info("AI analysis is disabled.")
+    elif ai.get("status") == "outside_ea_window":
+        st.info("Outside the EA's Asian/London entry windows. News and market data still refresh; AI prediction runs during eligible windows.")
+    elif ai.get("status") == "insufficient_market_data":
+        st.warning("EA entry window is open, but fresh market prices are unavailable, so no prediction was made.")
     if ai_result.get("summary"):
         st.write(ai_result["summary"])
     for caveat in ai_result.get("caveats", []):
@@ -108,6 +112,14 @@ def display_report(report):
         f"Regime: {market.get('relationship_change', 'unknown').replace('_', ' ')}. "
         "Correlations are descriptive, not causal or trading signals."
     )
+    session = report.get("ea_session", {})
+    if session.get("session"):
+        state = "entry window active" if session.get("active") else session.get("reason", "inactive")
+        st.caption(
+            f"EA schedule: {session['session']} · {state} · "
+            f"window starts {session.get('entry_window_start_utc', '—')} UTC · "
+            f"next scheduled opening {session.get('next_session_open_utc', '—')} UTC."
+        )
     yields = report.get("real_yields") or {}
     if yields.get("status") == "error":
         st.warning(f"US real-yield context unavailable: {yields.get('error', '')}")
@@ -186,10 +198,11 @@ def display_forecast_test(rows, error):
         return
     table = []
     for (created, direction, confidence, model, baseline, target_price, actual,
-         correct, target, outcome_status) in rows:
+         correct, target, outcome_status, session) in rows:
         table.append({
             "Forecast time (UTC)": created,
             "AI view": "Gold up" if direction == "up" else "Gold down",
+            "EA session": session,
             "Evidence confidence": confidence,
             "Model": model,
             "Gold baseline": round(baseline, 3),

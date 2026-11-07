@@ -34,7 +34,13 @@ running server is left untouched. Startup logs are in `data/ollama-startup.log`.
 Only one launcher can run per data folder. Do not also run a manual monitor
 against the same output folder. Ollama responsiveness/model checks do not
 verify inference quality; check the first report's AI status and reasoning.
-The launcher limits each AI/report snapshot to 10 headlines and allows up to
+The launcher polls news/market context every 5 minutes (after each scan
+finishes) and limits each AI/report snapshot to 10 headlines. AI prediction is
+run only during the enabled EA's eligible Asian/London entry windows, after
+the opening M15 range candle closes; outside those windows, headlines continue
+to be collected without an AI prediction. New York entries remain disabled,
+matching the EA preset. The dashboard refreshes its display every 30 seconds.
+The launcher allows up to
 10 minutes for local inference, including the first model load. Very slow
 hardware can still time out; incomplete/invalid output remains an explicit error.
 
@@ -83,7 +89,7 @@ For manual commands with multiple installations, also pass
 `--mt5-path "C:\Program Files\Weltrade MT5 Demo\terminal64.exe"`.
 Without this argument, manual mode uses MT5's automatic terminal selection.
 
-Omit `--once` to monitor continuously. Scans run every 900 seconds **after the
+Omit `--once` to monitor continuously. Scans run every 300 seconds **after the
 previous scan finishes**, configurable with `--interval` (minimum 300).
 Omit `--ollama-model` for quantitative monitoring without AI; reports explicitly
 label inference disabled. Missing or invalid AI output is recorded as an error,
@@ -175,6 +181,24 @@ The dashboard listens only on `127.0.0.1` and needs this monitor's local files.
 Hosting it later requires a secure deployment plus deliberate data-sync and
 authentication. Do not expose this unauthenticated dashboard publicly. A hosted
 dashboard cannot directly access MT5 or Ollama on your Windows computer.
+
+### EA session schedule used
+
+The schedule mirrors `Market_Sessions_EA_best.set` on the EA branch: Asian and
+London entries enabled, New York disabled; the EA still uses scheduled New York
+open as the end of the London entry window. The opening range is the first
+complete M15 candle after each session opens. The Desk starts predictions after
+that candle and stops at the next scheduled opening:
+
+| EA session | Local opening | UTC opening in winter | UTC opening in summer | Prediction window ends |
+| --- | --- | --- | --- | --- |
+| Asian | Fixed UTC | 23:00 | 23:00 | London open |
+| London | 09:00 Europe/London | 09:00 | 08:00 | New York open |
+| New York | 08:30 America/New_York | 13:30 | 12:30 | Disabled in this preset |
+
+Regional IANA timezones apply UK/US daylight saving independently. News is still
+collected outside these times so overnight or earlier events can inform the
+next eligible analysis. The Desk does not change, control, or block the EA.
 
 This initial version does not ingest ETF flow datasets, central-bank purchase
 statistics, a future economic-event calendar, consensus forecasts, intraday

@@ -30,6 +30,33 @@ def prices(count=310, same=False):
 
 
 class MarketTests(unittest.TestCase):
+    def test_ea_asian_window_waits_for_m15_then_ends_at_london(self):
+        wait = agent.trading_session(datetime(2026, 1, 13, 23, 10, tzinfo=agent.UTC))
+        self.assertEqual(wait["session"], "Asian")
+        self.assertFalse(wait["active"])
+        self.assertIn("M15", wait["reason"])
+        active = agent.trading_session(datetime(2026, 1, 13, 23, 20, tzinfo=agent.UTC))
+        self.assertTrue(active["active"])
+        self.assertEqual(active["next_session_open_utc"], "2026-01-14T09:00:00+00:00")
+
+    def test_ea_london_and_disabled_new_york_windows_in_winter(self):
+        london = agent.trading_session(datetime(2026, 1, 13, 9, 20, tzinfo=agent.UTC))
+        self.assertTrue(london["active"])
+        self.assertEqual(london["session"], "London")
+        self.assertEqual(london["next_session_open_utc"], "2026-01-13T13:30:00+00:00")
+        ny = agent.trading_session(datetime(2026, 1, 13, 13, 50, tzinfo=agent.UTC))
+        self.assertEqual(ny["session"], "New York")
+        self.assertFalse(ny["active"])
+        self.assertIn("disabled", ny["reason"])
+
+    def test_ea_london_and_new_york_opens_follow_daylight_saving(self):
+        london = agent.trading_session(datetime(2026, 7, 1, 8, 20, tzinfo=agent.UTC))
+        self.assertTrue(london["active"])
+        self.assertEqual(london["next_session_open_utc"], "2026-07-01T12:30:00+00:00")
+        ny = agent.trading_session(datetime(2026, 7, 1, 12, 50, tzinfo=agent.UTC))
+        self.assertFalse(ny["active"])
+        self.assertEqual(ny["session"], "New York")
+
     def test_inverse_returns(self):
         context = agent.market_context(*prices(), NOW.timestamp())
         self.assertEqual(context["status"], "ok")
@@ -215,7 +242,10 @@ class AITests(unittest.TestCase):
         with patch.object(agent, "request", return_value=self.answer(
             news=[{"id": "invented", "mechanism": "x", "potential_impact": "supportive"}]
         )):
-            self.assertEqual(agent.local_analysis("model", self.evidence())["status"], "error")
+            result = agent.local_analysis("model", self.evidence())
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["result"]["assessment"], "insufficient_evidence")
+        self.assertEqual(result["result"]["news"], [])
 
     def test_invalid_schema_rejected(self):
         with patch.object(agent, "request", return_value=self.answer(caveats="not a list")):
@@ -305,7 +335,7 @@ class PersistenceTests(unittest.TestCase):
         gold = [(baseline_open, 2000.0)]
         with sqlite3.connect(":memory:") as db:
             agent.initialize_forecasts(db)
-            self.assertTrue(agent.record_forecast(db, evidence, gold, NOW))
+            self.assertTrue(agent.record_forecast(db, evidence, gold, NOW, "Asian"))
             self.assertEqual(agent.grade_forecasts(db, gold, NOW), 0)
             # First five-minute candle close on or after the one-hour target.
             future_open = baseline_open + 3600
@@ -314,11 +344,12 @@ class PersistenceTests(unittest.TestCase):
                 db, future_gold, NOW + timedelta(hours=1, minutes=5)
             ), 1)
             row = db.execute(
-                "SELECT direction, actual_return_percent, correct FROM forecasts"
+                "SELECT direction, actual_return_percent, correct, session FROM forecasts"
             ).fetchone()
         self.assertEqual(row[0], "up")
         self.assertAlmostEqual(row[1], 0.5)
         self.assertEqual(row[2], 1)
+        self.assertEqual(row[3], "Asian")
 
     def test_mixed_or_stale_ai_is_not_counted_as_directional_forecast(self):
         baseline_open = int(NOW.timestamp()) - 300
@@ -329,10 +360,10 @@ class PersistenceTests(unittest.TestCase):
         }
         with sqlite3.connect(":memory:") as db:
             agent.initialize_forecasts(db)
-            self.assertFalse(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW))
+            self.assertFalse(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW, "Asian"))
             evidence["ai"]["result"]["assessment"] = "pressuring"
             evidence["market"]["status"] = "stale"
-            self.assertFalse(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW))
+            self.assertFalse(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW, "Asian"))
             self.assertEqual(db.execute("SELECT count(*) FROM forecasts").fetchone()[0], 0)
 
     def test_forecast_during_closing_gap_expires_instead_of_scoring_weekend(self):
@@ -345,15 +376,30 @@ class PersistenceTests(unittest.TestCase):
         }
         with sqlite3.connect(":memory:") as db:
             agent.initialize_forecasts(db)
-            self.assertTrue(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW))
+            self.assertTrue(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW, "London"))
             late_open = baseline_open + 3600 + 900
             late = NOW + timedelta(hours=1, minutes=20)
             self.assertEqual(agent.grade_forecasts(db, [(late_open, 1990)], late), 0)
-            status, correct = db.execute(
-                "SELECT outcome_status, correct FROM forecasts"
+            status, correct, session = db.execute(
+                "SELECT outcome_status, correct, session FROM forecasts"
             ).fetchone()
         self.assertEqual(status, "expired")
         self.assertIsNone(correct)
+        self.assertEqual(session, "London")
+
+    def test_old_forecast_database_migrates_in_place(self):
+        with sqlite3.connect(":memory:") as db:
+            db.execute(
+                """CREATE TABLE forecasts (
+                   id INTEGER PRIMARY KEY, created_utc TEXT NOT NULL, target_utc TEXT NOT NULL,
+                   direction TEXT NOT NULL, confidence TEXT NOT NULL, model TEXT NOT NULL,
+                   baseline_price REAL NOT NULL, target_price REAL, actual_return_percent REAL,
+                   correct INTEGER, outcome_utc TEXT, scored_utc TEXT)"""
+            )
+            agent.initialize_forecasts(db)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(forecasts)")}
+        self.assertIn("session", columns)
+        self.assertIn("outcome_status", columns)
 
     def test_scan_reports_and_deduplication(self):
         with tempfile.TemporaryDirectory() as folder:

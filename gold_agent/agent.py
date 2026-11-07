@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 UTC = timezone.utc
 LOG = logging.getLogger("gold_agent")
@@ -34,10 +35,59 @@ TOPICS = {
     "gold_flows_supply": ("gold", "bullion", "etf", "mining"),
     "dollar_yields": ("dollar", "treasury", "yield"),
 }
+SESSION_ZONES = {
+    "Asian": ZoneInfo("UTC"),
+    "London": ZoneInfo("Europe/London"),
+    "New York": ZoneInfo("America/New_York"),
+}
+SESSION_ENABLED = {"Asian": True, "London": True, "New York": False}
 
 
 def utc_now():
     return datetime.now(UTC)
+
+
+def trading_session(now):
+    """Return whether the EA currently permits a fresh entry after its M15 range forms."""
+    now = now.astimezone(UTC)
+    events = []
+    for day_offset in range(-2, 3):
+        utc_date = now.date() + timedelta(days=day_offset)
+        asian_open = datetime.combine(utc_date, datetime.min.time(), UTC) + timedelta(hours=23)
+        london_local = datetime.combine(utc_date, datetime.min.time(),
+                                        SESSION_ZONES["London"]).replace(hour=9)
+        ny_local = datetime.combine(utc_date, datetime.min.time(),
+                                    SESSION_ZONES["New York"]).replace(hour=8, minute=30)
+        events.extend([
+            (asian_open, "Asian"),
+            (london_local.astimezone(UTC), "London"),
+            (ny_local.astimezone(UTC), "New York"),
+        ])
+    events.sort()
+    previous = None
+    for index, event in enumerate(events[:-1]):
+        opened, name = event
+        following = events[index + 1][0]
+        if opened <= now < following:
+            previous = (opened, name, following)
+            break
+    if previous is None:
+        return {"active": False, "session": None, "reason": "No scheduled EA session"}
+    opened, name, following = previous
+    start = opened + timedelta(minutes=15)
+    window = {
+        "active": False, "session": name, "session_open_utc": opened.isoformat(),
+        "entry_window_start_utc": start.isoformat(), "next_session_open_utc": following.isoformat(),
+        "enabled": SESSION_ENABLED[name],
+    }
+    if not SESSION_ENABLED[name]:
+        window["reason"] = f"{name} entries are disabled in the EA preset"
+    elif now < start:
+        window["reason"] = "Waiting for the first full M15 opening-range candle to close"
+    else:
+        window["active"] = True
+        window["reason"] = "Within the EA's new-entry window"
+    return window
 
 
 def request(url, payload=None):
@@ -368,8 +418,13 @@ def local_analysis(model, evidence):
         "Do not invent consensus forecasts, surprise values, prices, facts, or probabilities. "
         "Daily real yields are background, not contemporaneous M5 evidence. "
         "A USD proxy is not DXY. Stale/error data cannot support a live directional conclusion. "
-        "Discuss gold/USD co-movement, weak or changing correlations, and competing drivers. "
-        "Do not recommend trades. Return JSON with exactly: assessment "
+        "Predict the likely gold direction over the next 1 hour from the latest completed M5 "
+        "close, conditional on this limited evidence: supportive means upward pressure on gold; "
+        "pressuring means downward pressure; mixed means no defensible direction. This is a "
+        "probabilistic context assessment, not certainty. Discuss gold/USD co-movement, weak or "
+        "changing correlations, and competing drivers. Do not recommend trades. For every news "
+        "reference copy the exact id from supplied news; if no headline supports the point, return "
+        "an empty news list. Never invent or paraphrase an article ID. Return JSON with exactly: assessment "
         "(supportive, pressuring, mixed, or insufficient_evidence), confidence "
         "(low, medium, or high; qualitative evidence confidence, not prediction accuracy), "
         "summary (string), caveats (list of strings), "
@@ -404,9 +459,18 @@ def local_analysis(model, evidence):
             raise ValueError("AI news must be a list")
         for item in result["news"]:
             if (not isinstance(item, dict) or set(item) != {"id", "mechanism", "potential_impact"}
-                    or item["id"] not in known or not isinstance(item["mechanism"], str)
+                    or not isinstance(item["id"], str) or not isinstance(item["mechanism"], str)
                     or item["potential_impact"] not in ("supportive", "pressuring", "mixed", "unclear")):
-                raise ValueError("AI news contains an invalid or invented reference")
+                raise ValueError("AI news has an invalid shape")
+        invalid_refs = [item for item in result["news"] if item["id"] not in known]
+        if invalid_refs:
+            result["assessment"] = "insufficient_evidence"
+            result["confidence"] = "low"
+            result["summary"] = "Analysis withheld because the model cited a headline not in the supplied evidence."
+            result["news"] = []
+            result["caveats"].append(
+                f"Withheld directional call: {len(invalid_refs)} unsupported headline reference(s) were returned."
+            )
         if evidence["market"]["status"] != "ok":
             result["assessment"] = "insufficient_evidence"
             result["confidence"] = "low"
@@ -425,6 +489,7 @@ def initialize_forecasts(db):
             created_utc TEXT NOT NULL,
             target_utc TEXT NOT NULL,
             direction TEXT NOT NULL CHECK(direction IN ('up', 'down')),
+            session TEXT NOT NULL DEFAULT 'unknown',
             confidence TEXT NOT NULL,
             model TEXT NOT NULL,
             baseline_price REAL NOT NULL,
@@ -437,6 +502,14 @@ def initialize_forecasts(db):
             scored_utc TEXT
         )"""
     )
+    columns = {row[1] for row in db.execute("PRAGMA table_info(forecasts)")}
+    if "session" not in columns:
+        db.execute("ALTER TABLE forecasts ADD COLUMN session TEXT NOT NULL DEFAULT 'unknown'")
+    if "outcome_status" not in columns:
+        db.execute(
+            """ALTER TABLE forecasts ADD COLUMN outcome_status TEXT NOT NULL DEFAULT 'pending'
+               CHECK(outcome_status IN ('pending', 'scored', 'expired'))"""
+        )
 
 
 def grade_forecasts(db, gold_closes, now):
@@ -476,7 +549,7 @@ def grade_forecasts(db, gold_closes, now):
     return scored
 
 
-def record_forecast(db, evidence, gold_closes, now):
+def record_forecast(db, evidence, gold_closes, now, session):
     ai = evidence.get("ai", {})
     if ai.get("status") != "ok" or evidence.get("market", {}).get("status") != "ok":
         return False
@@ -496,9 +569,9 @@ def record_forecast(db, evidence, gold_closes, now):
     result = ai["result"]
     db.execute(
         """INSERT INTO forecasts
-           (created_utc, target_utc, direction, confidence, model, baseline_price)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (now.isoformat(), target.isoformat(), direction, result["confidence"],
+           (created_utc, target_utc, direction, session, confidence, model, baseline_price)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (now.isoformat(), target.isoformat(), direction, session, result["confidence"],
          ai.get("model", "unknown"), baseline),
     )
     return True
@@ -506,6 +579,7 @@ def record_forecast(db, evidence, gold_closes, now):
 
 def scan(args):
     now = utc_now()
+    session = trading_session(now)
     news, health = collect_news(now, args.lookback_hours)
     yields = real_yields(now)
     try:
@@ -523,21 +597,30 @@ def scan(args):
             item["new"] = item["id"] not in seen
         evidence = {"as_of_utc": now.isoformat(), "market": market,
                     "real_yields": yields, "source_health": health,
+                    "ea_session": session,
                     "news": news[:args.max_headlines]}
         evidence["coverage"] = {
             "recent_items_retrieved": len(news), "items_in_report": len(evidence["news"]),
             "limitations": "Bounded feed/query coverage, not all global news. No consensus forecasts. "
                            "Headlines only; GDELT timestamps are first-seen times.",
         }
-        evidence["ai"] = local_analysis(args.ollama_model, evidence)
-        forecast_recorded = record_forecast(db, evidence, gold_closes, now)
+        if session["active"] and market.get("status") == "ok":
+            evidence["ai"] = local_analysis(args.ollama_model, evidence)
+        elif not session["active"]:
+            evidence["ai"] = {"status": "outside_ea_window", "note": session["reason"]}
+        else:
+            evidence["ai"] = {"status": "insufficient_market_data",
+                              "note": "The EA window is open, but gold/USD data is stale or unavailable."}
+        forecast_recorded = record_forecast(
+            db, evidence, gold_closes, now, session.get("session") or "unknown"
+        )
         evidence["forecast_test"] = {
             "horizon_hours": 1, "new_directional_forecast_recorded": forecast_recorded,
             "forecasts_scored_this_scan": scored,
             "method": "First completed M5 close at or after one hour from baseline; expire if over 10 minutes late",
         }
         statuses = [market["status"], yields["status"]] + [h["status"] for h in health.values()]
-        if args.ollama_model:
+        if args.ollama_model and session["active"] and market.get("status") == "ok":
             statuses.append(evidence["ai"]["status"])
         evidence["status"] = "ok" if all(s == "ok" for s in statuses) else "degraded"
         serialized = json.dumps(evidence, indent=2, allow_nan=False)
@@ -567,7 +650,7 @@ def arguments():
     parser.add_argument("--usd-inverse", action="store_true",
                         help="Invert FX returns for EURUSD/GBPUSD; NOT a true dollar index")
     parser.add_argument("--ollama-model", help="Installed local Ollama model; no cloud API used")
-    parser.add_argument("--interval", type=int, default=900, help="Seconds between scans (minimum 300)")
+    parser.add_argument("--interval", type=int, default=300, help="Seconds between scans (minimum 300)")
     parser.add_argument("--lookback-hours", type=int, default=24, help="News age limit, 1-72 hours")
     parser.add_argument("--max-headlines", type=int, default=30, help="Report/AI headline cap, 1-100")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "data")

@@ -209,6 +209,7 @@ def run():
                     "--output", str(output),
                     "--mt5-path", str(MT5_PATH),
                     "--max-headlines", "10",
+                    "--interval", "300",
                 ]
                 if settings["usd_inverse"]:
                     command.append("--usd-inverse")
