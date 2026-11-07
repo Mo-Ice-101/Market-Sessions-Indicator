@@ -292,6 +292,69 @@ class MT5Tests(unittest.TestCase):
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_forecast_is_saved_and_only_scored_after_one_hour(self):
+        baseline_open = int(NOW.timestamp()) - 300
+        evidence = {
+            "market": {"status": "ok",
+                       "latest_completed_bar_utc": datetime.fromtimestamp(
+                           baseline_open, agent.UTC
+                       ).isoformat()},
+            "ai": {"status": "ok", "model": "local-model",
+                   "result": {"assessment": "supportive", "confidence": "medium"}},
+        }
+        gold = [(baseline_open, 2000.0)]
+        with sqlite3.connect(":memory:") as db:
+            agent.initialize_forecasts(db)
+            self.assertTrue(agent.record_forecast(db, evidence, gold, NOW))
+            self.assertEqual(agent.grade_forecasts(db, gold, NOW), 0)
+            # First five-minute candle close on or after the one-hour target.
+            future_open = baseline_open + 3600
+            future_gold = gold + [(future_open, 2010.0)]
+            self.assertEqual(agent.grade_forecasts(
+                db, future_gold, NOW + timedelta(hours=1, minutes=5)
+            ), 1)
+            row = db.execute(
+                "SELECT direction, actual_return_percent, correct FROM forecasts"
+            ).fetchone()
+        self.assertEqual(row[0], "up")
+        self.assertAlmostEqual(row[1], 0.5)
+        self.assertEqual(row[2], 1)
+
+    def test_mixed_or_stale_ai_is_not_counted_as_directional_forecast(self):
+        baseline_open = int(NOW.timestamp()) - 300
+        evidence = {
+            "market": {"status": "ok", "latest_completed_bar_utc":
+                       datetime.fromtimestamp(baseline_open, agent.UTC).isoformat()},
+            "ai": {"status": "ok", "result": {"assessment": "mixed", "confidence": "low"}},
+        }
+        with sqlite3.connect(":memory:") as db:
+            agent.initialize_forecasts(db)
+            self.assertFalse(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW))
+            evidence["ai"]["result"]["assessment"] = "pressuring"
+            evidence["market"]["status"] = "stale"
+            self.assertFalse(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW))
+            self.assertEqual(db.execute("SELECT count(*) FROM forecasts").fetchone()[0], 0)
+
+    def test_forecast_during_closing_gap_expires_instead_of_scoring_weekend(self):
+        baseline_open = int(NOW.timestamp()) - 300
+        evidence = {
+            "market": {"status": "ok", "latest_completed_bar_utc":
+                       datetime.fromtimestamp(baseline_open, agent.UTC).isoformat()},
+            "ai": {"status": "ok", "model": "local-model",
+                   "result": {"assessment": "pressuring", "confidence": "medium"}},
+        }
+        with sqlite3.connect(":memory:") as db:
+            agent.initialize_forecasts(db)
+            self.assertTrue(agent.record_forecast(db, evidence, [(baseline_open, 2000)], NOW))
+            late_open = baseline_open + 3600 + 900
+            late = NOW + timedelta(hours=1, minutes=20)
+            self.assertEqual(agent.grade_forecasts(db, [(late_open, 1990)], late), 0)
+            status, correct = db.execute(
+                "SELECT outcome_status, correct FROM forecasts"
+            ).fetchone()
+        self.assertEqual(status, "expired")
+        self.assertIsNone(correct)
+
     def test_scan_reports_and_deduplication(self):
         with tempfile.TemporaryDirectory() as folder:
             args = argparse.Namespace(output=Path(folder), lookback_hours=24,

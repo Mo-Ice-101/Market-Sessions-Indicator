@@ -10,7 +10,8 @@ price predictions. It runs independently; its reports are not drawn on the MT5 c
 
 Open MT5 and log into your broker, then double-click **`Start_Gold_Agent.cmd`**
 in this folder. It creates the Python environment if missing, installs the MT5
-connector only when its import fails, and presets gold to **`XAUUSD_i`**.
+connector and Streamlit dashboard only when an import fails, and presets gold
+to **`XAUUSD_i`**.
 Startup and every scan use the explicit terminal
 `C:\Program Files\Weltrade MT5 Demo\terminal64.exe`, avoiding automatic selection
 when multiple MT5 installations are present. Keep that terminal logged in.
@@ -24,7 +25,10 @@ starts its local server if needed and verifies it responds. If the chosen
 local model is missing, it asks permission to download it (potentially several
 GB); declining stops startup, rather than silently disabling AI. The default
 model is `qwen2.5:7b`; choose a smaller local model if your hardware requires it.
-Keep the console open for continuous monitoring; Ctrl+C stops it.
+Keep the console open for continuous monitoring; Ctrl+C stops the agent and its
+dashboard. The browser opens the local dashboard at `http://127.0.0.1:8501`.
+If the browser does not open, enter that address yourself while the launcher
+is running.
 An Ollama server started by the launcher is stopped when it exits; an already
 running server is left untouched. Startup logs are in `data/ollama-startup.log`.
 Only one launcher can run per data folder. Do not also run a manual monitor
@@ -112,12 +116,13 @@ Default output is `gold_agent/data/` (git-ignored):
 - `latest.json`: most recent complete report, replaced atomically.
 - `report-<UTC timestamp>.json`: historical reports with source-linked headlines,
   quantitative context, qualitative AI reasoning and caveats.
-- `state.sqlite3`: URL-based deduplication; emitted headlines have `new: true`
-  only on their first report. Older retained headlines remain available as context.
+- `state.sqlite3`: URL-based deduplication plus one-hour directional forecasts
+  and their outcomes. Headlines have `new: true` only on their first report.
 - `agent.log`: source failures and scan summaries.
 
-Console JSON gives the report path, new-headline count, market context and AI
-assessment. This is a console/file alert surface, not email or Telegram delivery.
+The browser dashboard at `http://127.0.0.1:8501` shows market context, linked
+headlines, data warnings and forecast-test results. The console also reports the
+latest file path; email or Telegram delivery is not included.
 Reports and logs accumulate: archive or remove old files as appropriate. Run only
 one monitor per output directory. Changing `--output` changes the deduplication
 state. News freshness defaults to 24 hours (`--lookback-hours`, range 1-72).
@@ -147,6 +152,29 @@ exist in that snapshot. Missing/stale market data forces insufficient evidence
 and low confidence, but schema checks cannot prove the model's reasoning is
 correct. Confidence describes evidence quality, **not a calibrated probability
 of profit**. Headlines are untrusted input and interpretations need human review.
+
+### One-hour forecast evaluation
+
+When AI returns a directional view (`supportive` or `pressuring`) with fresh
+market data, the agent stores that view and the baseline gold M5 close in SQLite.
+After the target time, a later scan scores it against the first completed M5
+close at or after one hour, only if that close is within 10 minutes of the target.
+If the market is closed or a price gap is larger, that forecast expires unscored.
+Mixed/insufficient views and stale-market scans are not counted. The dashboard reports directional hit rate and realized,
+direction-aligned gold returns. This is a prospective forward test, not a
+historical AI backtest, strategy simulation, or estimate of profit; it excludes
+spread, fees, slippage, trade rules, and position sizing.
+
+The included July–October gold M1 CSV contains prices only. It has no matching
+historical headlines or saved AI forecasts, so it cannot establish how this
+agent would have predicted the past. The evaluation starts accumulating after
+the current monitor runs with healthy AI and live MT5 data. It does not show
+that a headline caused a price change.
+
+The dashboard listens only on `127.0.0.1` and needs this monitor's local files.
+Hosting it later requires a secure deployment plus deliberate data-sync and
+authentication. Do not expose this unauthenticated dashboard publicly. A hosted
+dashboard cannot directly access MT5 or Ollama on your Windows computer.
 
 This initial version does not ingest ETF flow datasets, central-bank purchase
 statistics, a future economic-event calendar, consensus forecasts, intraday

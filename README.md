@@ -6,8 +6,10 @@ MQL5 indicator that draws boxes around Asian, London, and NY trading sessions wi
 The optional [Python gold agent](gold_agent/README.md) runs alongside MT5 on
 Windows. It combines public news headlines, gold/USD rolling return correlations,
 daily US real-yield context, and optional local Ollama AI interpretation.
-It writes source-linked reports and flags conflicting signals or missing data;
-it does not place trades or change the indicator.
+It includes a local web dashboard with source-linked reports and a prospective
+one-hour forecast evaluation. It flags conflicting signals or missing data and
+does not place trades or change the indicator. Historical AI performance is not
+available until timestamped forecasts have been collected and scored.
 
 ## Installation
 

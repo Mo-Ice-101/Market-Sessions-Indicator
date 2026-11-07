@@ -350,6 +350,7 @@ def read_market(args, now):
             prices.append(bars)
         result = market_context(*prices, now.timestamp(), args.usd_inverse)
         result.update({"gold_symbol": args.gold_symbol, "usd_symbol": args.usd_symbol})
+        result["_gold_closes"] = sorted(prices[0].items())
         return result
     finally:
         mt5.shutdown()
@@ -417,6 +418,92 @@ def local_analysis(model, evidence):
         return {"status": "error", "error": str(exc)}
 
 
+def initialize_forecasts(db):
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS forecasts (
+            id INTEGER PRIMARY KEY,
+            created_utc TEXT NOT NULL,
+            target_utc TEXT NOT NULL,
+            direction TEXT NOT NULL CHECK(direction IN ('up', 'down')),
+            confidence TEXT NOT NULL,
+            model TEXT NOT NULL,
+            baseline_price REAL NOT NULL,
+            target_price REAL,
+            actual_return_percent REAL,
+            correct INTEGER CHECK(correct IS NULL OR correct IN (0, 1)),
+            outcome_status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(outcome_status IN ('pending', 'scored', 'expired')),
+            outcome_utc TEXT,
+            scored_utc TEXT
+        )"""
+    )
+
+
+def grade_forecasts(db, gold_closes, now):
+    """Score only after an observed completed bar reaches each one-hour target."""
+    initialize_forecasts(db)
+    closes = sorted(
+        (int(stamp) + 300, float(price)) for stamp, price in (gold_closes or [])
+        if int(stamp) + 300 <= now.timestamp() and math.isfinite(float(price)) and float(price) > 0
+    )
+    pending = db.execute(
+        """SELECT id, target_utc, direction, baseline_price
+           FROM forecasts WHERE outcome_status = 'pending'"""
+    ).fetchall()
+    scored = 0
+    for row_id, target_text, direction, baseline in pending:
+        target = datetime.fromisoformat(target_text).timestamp()
+        outcome = next(((stamp, price) for stamp, price in closes if stamp >= target), None)
+        if outcome is None:
+            continue
+        outcome_epoch, price = outcome
+        if outcome_epoch > target + 600:
+            db.execute(
+                "UPDATE forecasts SET outcome_status = 'expired', scored_utc = ? WHERE id = ?",
+                (now.isoformat(), row_id),
+            )
+            continue
+        actual = (price / baseline - 1) * 100
+        correct = int((direction == "up" and actual > 0) or (direction == "down" and actual < 0))
+        db.execute(
+            """UPDATE forecasts SET target_price = ?, actual_return_percent = ?,
+               correct = ?, outcome_status = 'scored', outcome_utc = ?,
+               scored_utc = ? WHERE id = ?""",
+            (price, actual, correct, datetime.fromtimestamp(outcome_epoch, UTC).isoformat(),
+             now.isoformat(), row_id),
+        )
+        scored += 1
+    return scored
+
+
+def record_forecast(db, evidence, gold_closes, now):
+    ai = evidence.get("ai", {})
+    if ai.get("status") != "ok" or evidence.get("market", {}).get("status") != "ok":
+        return False
+    assessment = ai.get("result", {}).get("assessment")
+    direction = {"supportive": "up", "pressuring": "down"}.get(assessment)
+    if direction is None:
+        return False
+    bar_text = evidence["market"].get("latest_completed_bar_utc")
+    try:
+        bar_open = datetime.fromisoformat(bar_text).timestamp()
+        prices = {int(stamp): float(price) for stamp, price in (gold_closes or [])}
+        baseline = prices[int(bar_open)]
+    except (ValueError, TypeError, KeyError):
+        return False
+    target_epoch = bar_open + 300 + 3600
+    target = datetime.fromtimestamp(target_epoch, UTC)
+    result = ai["result"]
+    db.execute(
+        """INSERT INTO forecasts
+           (created_utc, target_utc, direction, confidence, model, baseline_price)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (now.isoformat(), target.isoformat(), direction, result["confidence"],
+         ai.get("model", "unknown"), baseline),
+    )
+    return True
+
+
 def scan(args):
     now = utc_now()
     news, health = collect_news(now, args.lookback_hours)
@@ -426,8 +513,11 @@ def scan(args):
     except (RuntimeError, ValueError) as exc:
         LOG.error("Market data unavailable: %s", exc)
         market = {"status": "error", "error": str(exc)}
+    gold_closes = market.pop("_gold_closes", [])
     with sqlite3.connect(args.output / "state.sqlite3", timeout=10) as db:
         db.execute("CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, seen_utc TEXT NOT NULL)")
+        initialize_forecasts(db)
+        scored = grade_forecasts(db, gold_closes, now)
         seen = {row[0] for row in db.execute("SELECT id FROM seen")}
         for item in news:
             item["new"] = item["id"] not in seen
@@ -440,6 +530,12 @@ def scan(args):
                            "Headlines only; GDELT timestamps are first-seen times.",
         }
         evidence["ai"] = local_analysis(args.ollama_model, evidence)
+        forecast_recorded = record_forecast(db, evidence, gold_closes, now)
+        evidence["forecast_test"] = {
+            "horizon_hours": 1, "new_directional_forecast_recorded": forecast_recorded,
+            "forecasts_scored_this_scan": scored,
+            "method": "First completed M5 close at or after one hour from baseline; expire if over 10 minutes late",
+        }
         statuses = [market["status"], yields["status"]] + [h["status"] for h in health.values()]
         if args.ollama_model:
             statuses.append(evidence["ai"]["status"])

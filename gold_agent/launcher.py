@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parent
@@ -115,6 +116,31 @@ def start_ollama(executable, log, owned):
     raise RuntimeError(f"Ollama did not become responsive: {last_error}")
 
 
+def start_dashboard(log):
+    process = subprocess.Popen(
+        [sys.executable, "-m", "streamlit", "run", str(HOME / "app.py"),
+         "--server.address", "127.0.0.1", "--server.port", "8501",
+         "--server.headless", "true"],
+        cwd=HOME, stdout=log, stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    url = "http://127.0.0.1:8501"
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("Dashboard exited during startup; see data/dashboard.log")
+        try:
+            with urllib.request.urlopen(url + "/_stcore/health", timeout=2) as response:
+                if response.status == 200 and response.read(64).strip() == b"ok":
+                    webbrowser.open(url)
+                    return process, url
+        except OSError:
+            time.sleep(1)
+    process.terminate()
+    process.wait(timeout=10)
+    raise RuntimeError("Dashboard did not start; see data/dashboard.log")
+
+
 def run():
     if sys.platform != "win32":
         raise RuntimeError("This launcher requires Windows with MetaTrader 5 installed")
@@ -154,6 +180,7 @@ def run():
         temporary.replace(path)
         executable = ollama_executable()
         owned = []
+        dashboard = None
         with (output / "ollama-startup.log").open("a", encoding="utf-8") as log:
             try:
                 names = start_ollama(executable, log, owned)
@@ -170,7 +197,10 @@ def run():
                     )
                     if not model_available(settings["model"], ollama_models()):
                         raise RuntimeError("The requested local model is still unavailable")
+                with (output / "dashboard.log").open("a", encoding="utf-8") as dashboard_log:
+                    dashboard, dashboard_url = start_dashboard(dashboard_log)
                 print(f"\nStarting {GOLD_SYMBOL} / {settings['usd_symbol']} with {settings['model']}.")
+                print(f"Dashboard: {dashboard_url}")
                 print("Scans run continuously. Reports: " + str(output / "latest.json"))
                 print("Keep this window open. Press Ctrl+C to stop. Your EA is unaffected.")
                 command = [
@@ -194,6 +224,13 @@ def run():
                         monitor.wait()
                     raise
             finally:
+                if dashboard and dashboard.poll() is None:
+                    dashboard.terminate()
+                    try:
+                        dashboard.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        dashboard.kill()
+                        dashboard.wait()
                 for process in owned:
                     if process.poll() is None:
                         process.terminate()
