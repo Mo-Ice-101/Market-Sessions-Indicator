@@ -1,6 +1,14 @@
 # Market-Sessions-Indicator
 MQL5 indicator that draws boxes around Asian, London, and NY trading sessions with M15 breakout colors and customizable transparency
 
+## Gold news monitor
+
+The optional [Python gold agent](gold_agent/README.md) runs alongside MT5 on
+Windows. It combines public news headlines, gold/USD rolling return correlations,
+daily US real-yield context, and optional local Ollama AI interpretation.
+It writes source-linked reports and flags conflicting signals or missing data;
+it does not place trades or change the indicator.
+
 ## Installation
 
 1. In MetaTrader 5, select **File → Open Data Folder**.
@@ -167,8 +175,9 @@ In winter, expect UTC 14:30 and SAST 16:30. Check both endpoints, overnight
 date rollovers, and the DST boundary dates below. Logs are unconditional and
 can be verbose across the configured history window; calculations are unchanged.
 
-This repository has no automated test infrastructure. Compilation and visual
-verification require MetaEditor/MT5.
+The MQL5 indicator has no automated tests. Compilation and visual verification
+require MetaEditor/MT5. The standalone Python agent has deterministic tests
+documented in `gold_agent/README.md`.
 
 1. Compile with F7 and check for errors/warnings, then attach to an M1 chart
    with available history. Leave automatic detection enabled and compare the
