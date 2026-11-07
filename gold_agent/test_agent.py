@@ -4,6 +4,7 @@ import math
 import sqlite3
 import tempfile
 import types
+import urllib.error
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -87,6 +88,54 @@ class MarketTests(unittest.TestCase):
 
 
 class NewsTests(unittest.TestCase):
+    def test_gdelt_rate_limit_cooldown_preserves_other_feeds(self):
+        rate_error = urllib.error.HTTPError(
+            "https://api.gdeltproject.org", 429, "Too Many Requests",
+            {"Retry-After": "3600"}, None,
+        )
+        calls = []
+
+        def retrieve(url):
+            calls.append(url)
+            if "api.gdeltproject.org" in url:
+                raise rate_error
+            return b"<rss><channel/></rss>"
+
+        with patch.object(agent, "GDELT_RETRY_AT", None), \
+                patch.object(agent, "GDELT_RATE_FAILURES", 0), \
+                patch.object(agent, "request", side_effect=retrieve):
+            _, first = agent.collect_news(NOW, 24)
+            self.assertEqual(agent.GDELT_RETRY_AT, NOW + timedelta(hours=1))
+            _, second = agent.collect_news(NOW + timedelta(minutes=15), 24)
+            self.assertIn("cooldown", second["GDELT"]["error"])
+            self.assertEqual(sum("api.gdeltproject.org" in url for url in calls), 1)
+            self.assertEqual(len(calls), 9)
+            self.assertEqual(first["Federal Reserve"]["status"], "ok")
+
+    def test_treasury_fallback_is_attributed(self):
+        xml = b"""<feed xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"
+        xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices">
+        <m:properties><d:NEW_DATE>2026-11-05T00:00:00</d:NEW_DATE>
+        <d:TC_10YEAR>1.80</d:TC_10YEAR></m:properties>
+        <m:properties><d:NEW_DATE>2026-11-06T00:00:00</d:NEW_DATE>
+        <d:TC_10YEAR>1.85</d:TC_10YEAR></m:properties></feed>"""
+        with patch.object(agent, "request", side_effect=[
+            urllib.error.HTTPError("url", 404, "Not Found", {}, None), xml
+        ]) as retrieve:
+            result = agent.real_yields(NOW)
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("Treasury", result["series"])
+        self.assertIn("404", result["source_warning"])
+        self.assertAlmostEqual(result["change_basis_points"], 5)
+        self.assertIn("daily_treasury_real_yield_curve", retrieve.call_args.args[0])
+
+    def test_both_yield_sources_fail_explicitly(self):
+        with patch.object(agent, "request", side_effect=OSError("offline")):
+            result = agent.real_yields(NOW)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("FRED", result["error"])
+        self.assertIn("Treasury", result["error"])
+
     def test_non_feed_response_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "neither an RSS"):
             agent.read_feed("test", b"<html><body>Unavailable</body></html>", NOW, 24)
@@ -152,6 +201,15 @@ class AITests(unittest.TestCase):
             result = agent.local_analysis("local-model", self.evidence())
         self.assertEqual(result["status"], "ok")
         self.assertEqual(req.call_args.args[0], "http://127.0.0.1:11434/api/generate")
+        self.assertEqual(req.call_args.args[1]["options"]["num_predict"], 1200)
+
+    def test_local_inference_gets_longer_timeout(self):
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"{}"
+        with patch.object(agent.urllib.request, "urlopen", return_value=response) as connect:
+            agent.request("http://127.0.0.1:11434/api/generate", {"model": "model"})
+        self.assertEqual(connect.call_args.kwargs["timeout"], 600)
 
     def test_invented_reference_rejected(self):
         with patch.object(agent, "request", return_value=self.answer(

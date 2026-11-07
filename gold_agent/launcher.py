@@ -178,6 +178,7 @@ def run():
                     "--usd-symbol", settings["usd_symbol"], "--ollama-model", settings["model"],
                     "--output", str(output),
                     "--mt5-path", str(MT5_PATH),
+                    "--max-headlines", "10",
                 ]
                 if settings["usd_inverse"]:
                     command.append("--usd-inverse")

@@ -18,6 +18,8 @@ from pathlib import Path
 
 UTC = timezone.utc
 LOG = logging.getLogger("gold_agent")
+GDELT_RETRY_AT = None
+GDELT_RATE_FAILURES = 0
 FEEDS = {
     "Federal Reserve": "https://www.federalreserve.gov/feeds/press_all.xml",
     "ECB": "https://www.ecb.europa.eu/rss/press.html",
@@ -45,7 +47,7 @@ def request(url, payload=None):
         headers={"User-Agent": "GoldContextMonitor/1.0",
                  "Content-Type": "application/json" if data else "text/plain"},
     )
-    with urllib.request.urlopen(req, timeout=90 if data else 25) as response:
+    with urllib.request.urlopen(req, timeout=600 if data else 25) as response:
         body = response.read(4_000_001)
     if len(body) > 4_000_000:
         raise ValueError("Response exceeded the 4 MB retrieval limit")
@@ -113,6 +115,7 @@ def read_feed(source, body, now, hours):
 
 
 def collect_news(now, hours):
+    global GDELT_RETRY_AT, GDELT_RATE_FAILURES
     items, health = [], {}
     for source, url in FEEDS.items():
         try:
@@ -128,6 +131,8 @@ def collect_news(now, hours):
         "maxrecords": 100, "sort": "datedesc", "timespan": f"{hours}h",
     })
     try:
+        if GDELT_RETRY_AT and now < GDELT_RETRY_AT:
+            raise RuntimeError(f"Rate-limit cooldown until {GDELT_RETRY_AT.isoformat()}")
         result = json.loads(request("https://api.gdeltproject.org/api/v2/doc/doc?" + params))
         if not isinstance(result, dict) or not isinstance(result.get("articles"), list):
             raise ValueError("GDELT returned no valid article list")
@@ -147,11 +152,67 @@ def collect_news(now, hours):
         items.extend(found)
         health["GDELT"] = {"status": "ok", "recent_items": len(found),
                            "retrieval_cap": 100, "possibly_truncated": len(result["articles"]) >= 100}
-    except (OSError, ValueError, TypeError) as exc:
+        GDELT_RETRY_AT = None
+        GDELT_RATE_FAILURES = 0
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            GDELT_RATE_FAILURES += 1
+            delay = min(21600, 1800 * 2 ** min(GDELT_RATE_FAILURES - 1, 4))
+            retry_after = exc.headers.get("Retry-After", "") if exc.headers else ""
+            if retry_after.isdigit():
+                delay = max(delay, int(retry_after))
+            else:
+                retry_date = published_time(retry_after)
+                if retry_date:
+                    delay = max(delay, (retry_date - now).total_seconds())
+            GDELT_RETRY_AT = now + timedelta(seconds=delay)
+        LOG.error("GDELT unavailable: %s", exc)
+        health["GDELT"] = {"status": "error", "error": str(exc)}
+        if GDELT_RETRY_AT:
+            health["GDELT"]["retry_after_utc"] = GDELT_RETRY_AT.isoformat()
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
         LOG.error("GDELT unavailable: %s", exc)
         health["GDELT"] = {"status": "error", "error": str(exc)}
     unique = {item["id"]: item for item in items}
     return sorted(unique.values(), key=lambda item: item["published_utc"], reverse=True), health
+
+
+def treasury_real_yields(now):
+    points = {}
+    ns = {"d": "http://schemas.microsoft.com/ado/2007/08/dataservices",
+          "m": "http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"}
+    # Early January may need the preceding year's last published observations.
+    years = sorted({now.year, (now - timedelta(days=30)).year})
+    for year in years:
+        url = ("https://home.treasury.gov/resource-center/data-chart-center/"
+               "interest-rates/pages/xml?" + urllib.parse.urlencode({
+                   "data": "daily_treasury_real_yield_curve", "field_tdr_date_value": year,
+               }))
+        root = ET.fromstring(request(url))
+        for properties in root.findall(".//m:properties", ns):
+            date = properties.findtext("d:NEW_DATE", namespaces=ns)
+            value = properties.findtext("d:TC_10YEAR", namespaces=ns)
+            if not date or not value:
+                continue
+            parsed = datetime.fromisoformat(date.replace("Z", "+00:00")).date()
+            if not now.date() - timedelta(days=30) <= parsed <= now.date():
+                continue
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("Treasury returned a non-finite real yield")
+            points[parsed.isoformat()] = number
+    ordered = sorted(points.items())
+    if len(ordered) < 2:
+        raise ValueError("Treasury has fewer than two recent real-yield observations")
+    age = (now.date() - datetime.strptime(ordered[-1][0], "%Y-%m-%d").date()).days
+    return {"status": "stale" if age > 7 else "ok",
+            "series": "US Treasury 10-year real yield curve",
+            "source_url": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates",
+            "observation_date": ordered[-1][0], "age_days": age,
+            "yield_percent": ordered[-1][1],
+            "previous_observation_date": ordered[-2][0],
+            "change_basis_points": round((ordered[-1][1] - ordered[-2][1]) * 100, 4),
+            "frequency": "daily; not an intraday signal"}
 
 
 def real_yields(now):
@@ -192,8 +253,14 @@ def real_yields(now):
                 "change_basis_points": round((points[-1][1] - points[-2][1]) * 100, 4),
                 "frequency": "daily; not an intraday signal"}
     except (OSError, ValueError, KeyError) as exc:
-        LOG.error("Real-yield data unavailable: %s", exc)
-        return {"status": "error", "error": str(exc)}
+        LOG.warning("FRED unavailable; trying official Treasury real yields: %s", exc)
+        try:
+            result = treasury_real_yields(now)
+            result["source_warning"] = f"FRED retrieval failed: {exc}; official Treasury source used"
+            return result
+        except (OSError, ValueError, ET.ParseError) as treasury_exc:
+            LOG.error("Real-yield sources unavailable: FRED %s; Treasury %s", exc, treasury_exc)
+            return {"status": "error", "error": f"FRED: {exc}; Treasury: {treasury_exc}"}
 
 
 def correlation(left, right):
@@ -314,7 +381,7 @@ def local_analysis(model, evidence):
     try:
         response = json.loads(request("http://127.0.0.1:11434/api/generate", {
             "model": model, "prompt": prompt, "stream": False, "format": "json",
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": 1200, "num_ctx": 8192},
         }))
         result = json.loads(response["response"])
         if not isinstance(result, dict) or set(result) != {

@@ -30,6 +30,9 @@ running server is left untouched. Startup logs are in `data/ollama-startup.log`.
 Only one launcher can run per data folder. Do not also run a manual monitor
 against the same output folder. Ollama responsiveness/model checks do not
 verify inference quality; check the first report's AI status and reasoning.
+The launcher limits each AI/report snapshot to 10 headlines and allows up to
+10 minutes for local inference, including the first model load. Very slow
+hardware can still time out; incomplete/invalid output remains an explicit error.
 
 ### Manual setup
 
@@ -91,11 +94,17 @@ Public inputs require no API keys:
 | GDELT DOC API | Global headline discovery | At most 100 newest matches per query, indexing delays, first-seen timestamps; not exhaustive |
 | Federal Reserve, ECB, BLS, BEA RSS | Official policy and economic release headlines | Feed retention varies; headlines are not full release analysis |
 | FRED public DFII10 CSV download | US 10-year real Treasury yield context | Daily observations, not live yields; no FRED API key because this is a public CSV download, not the keyed API |
+| US Treasury public real-yield XML | Official fallback if FRED retrieval fails | Daily 10-year real yield curve; report identifies the source and FRED failure |
 | Your MT5 broker | Completed gold and USD-comparison M5 bars | Windows required; broker coverage, history and licensing apply |
 
 The agent does **not** scrape paywalls or redistribute full articles. Follow
 source terms, preserve attribution, and expect throttling or source outages.
 Failed feeds appear in `source_health` and the overall scan becomes `degraded`.
+GDELT HTTP 429 responses start a 30-minute cooldown, doubling on repeated
+rate limits up to six hours, while respecting a longer `Retry-After` response.
+Official RSS feeds continue during cooldown; it does not guarantee GDELT access
+will recover. Cooldown state lasts for the current monitor process; restarting
+resets it, so do not repeatedly restart to bypass a rate limit.
 No recent headlines does not mean no relevant news occurred.
 
 Default output is `gold_agent/data/` (git-ignored):
