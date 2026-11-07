@@ -154,6 +154,28 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   A retracement, broker restriction or execution failure can prevent protection
   at break-even; the EA cannot guarantee a risk-free remainder.
 
+### Approximate Python replay
+
+`tools/sim_ea.py` preserves the research simulator for testing additional MT5
+M1 exports. It uses Python's standard library only. From the repository folder:
+
+```sh
+python tools/sim_ea.py path/to/new_M1_export.csv --balance 1000 --lots 0.04
+```
+
+Defaults match the current baseline: UTC+2 with EU DST, Asian/London enabled,
+NY and midpoint entries disabled, M1-close break-even at +1R, 50% exit at 2R,
+then 2x M15 ATR(14) trailing. Use `--verbose` for completed trade details.
+The input is an MT5 tab-separated M1 export with spread in points.
+Instrument assumptions are 3 digits, 100 oz/lot and 0.01 minimum/step.
+
+This is an approximate bar replay, not native EA execution: stops are processed
+before targets within an M1 bar and trailing updates at M1 closes. It excludes
+commissions, swaps, slippage, margin/stop-outs and broker restrictions. Validate
+results in MT5 with real ticks. Research switches retained as environment
+variables include `SKIP`, `NOMID`, `BE_R`, `SCALE_FRACTION`, `REVERSAL`, `UNLOCK`,
+`REV_MIN`, `NY_SWEEP`, `HALF_AT_BE` and `FIXRR`; unset them for the baseline.
+
 ### Sizing and inputs
 
 `Market_Sessions_EA_best.set` holds the recommended preset (EU DST, NY off,
