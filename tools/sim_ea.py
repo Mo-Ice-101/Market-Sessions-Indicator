@@ -8,8 +8,12 @@ parser.add_argument("csv", help="MT5 tab-separated M1 OHLC export with spread in
 parser.add_argument("--broker-dst", choices=("none", "europe"), default="europe")
 parser.add_argument("--balance", type=float, default=1000)
 parser.add_argument("--lots", type=float, default=0.04)
+parser.add_argument("--stop-buffer-price", type=float, default=1.0,
+                    help="Price units beyond the opposite M15 range boundary (default 1.000)")
 parser.add_argument("--verbose", action="store_true", help="Print completed trades")
 args = parser.parse_args()
+if not math.isfinite(args.stop_buffer_price) or args.stop_buffer_price < 0:
+    parser.error("--stop-buffer-price must be nonnegative and finite")
 if not math.isfinite(args.balance) or args.balance <= 0:
     parser.error("--balance must be positive and finite")
 if not math.isfinite(args.lots) or args.lots < 0.02 or abs(args.lots / 0.02 - round(args.lots / 0.02)) > 1e-8:
@@ -21,7 +25,7 @@ os.environ["LOTS"] = str(args.lots)
 for key, value in {"SKIP": "NY", "NOMID": "Asian,London,NY", "BE_R": "1"}.items():
     os.environ.setdefault(key, value)
 POINT, CONTRACT, STEP, MINLOT = 0.001, 100.0, 0.01, 0.01
-BUFFER, DEV, ATRP, TRAIL = 10 * POINT, 20 * POINT, 14, 2.0
+BUFFER, DEV, ATRP, TRAIL = args.stop_buffer_price, 20 * POINT, 14, 2.0
 BASE = 2 * 3600
 SESS = [("Asian", 60), ("London", 660), ("NY", 810)]
 
@@ -274,6 +278,7 @@ for e in equity_curve: peak = max(peak, e); mdd = max(mdd, (peak - e) / peak)
 gp, gl = sum(x["pnl"] for x in wins), -sum(x["pnl"] for x in losses)
 print("Approximate M1 replay: no commissions, swaps, margin/stop-outs or broker execution restrictions.")
 print(f"Broker DST={DST} fixed lots={args.lots}  ranges={len(ranges)} signals={sum(1 for r in ranges if r['conf'])}")
+print(f"Stop buffer={BUFFER:.3f} price units")
 print(f"Trades {len(done)}  skipped(volume) {sum(1 for x in trades if x.get('skipped'))}")
 print(f"Net {balance - START:+.2f}  final {balance:.2f}  winrate {len(wins)/max(1,len(done))*100:.1f}%  "
       f"PF {gp/gl if gl else float('inf'):.2f}  maxDD {mdd*100:.1f}%")

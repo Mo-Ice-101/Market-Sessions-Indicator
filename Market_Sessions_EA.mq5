@@ -1,5 +1,5 @@
 #property strict
-#property version "1.06"
+#property version "1.07"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
@@ -27,7 +27,7 @@ input ulong  InpDeviationPoints = 20;
 input int    InpMaxSpreadPoints = 0; // 0 disables the entry spread filter
 
 input group "Stops and ATR Management (completed M15 candles)"
-input double InpStopBufferPoints = 10.0; // Beyond the opposite opening-range boundary
+input double InpStopBufferPrice = 1.0; // Price units beyond opposite M15 boundary (gold: 1.000)
 input double InpBreakEvenR = 1.0; // Move stop to entry after M1 close at this R; 0 disables early BE
 input int    InpATRPeriod = 14;
 input double InpTrailingATR = 2.0;
@@ -165,13 +165,13 @@ bool AttachSessionBoxes()
 int OnInit()
 {
    if(!MathIsValidNumber(InpRiskPercent) || !MathIsValidNumber(InpFixedLots) ||
-      !MathIsValidNumber(InpStopBufferPoints) || !MathIsValidNumber(InpTrailingATR) ||
+      !MathIsValidNumber(InpStopBufferPrice) || !MathIsValidNumber(InpTrailingATR) ||
       !MathIsValidNumber(InpBreakEvenR) || InpBreakEvenR < 0 ||
       !MathIsValidNumber(InpBrokerUTCOffset) ||
       InpSizing < SIZE_EQUITY_PERCENT || InpSizing > SIZE_FIXED_LOTS ||
       (InpSizing == SIZE_EQUITY_PERCENT && (InpRiskPercent <= 0 || InpRiskPercent > 100)) ||
       (InpSizing == SIZE_FIXED_LOTS && InpFixedLots <= 0) ||
-      InpATRPeriod < 1 || InpStopBufferPoints < 0 || InpTrailingATR <= 0 ||
+      InpATRPeriod < 1 || InpStopBufferPrice < 0 || InpTrailingATR <= 0 ||
       InpMagic == 0 || InpMaxSpreadPoints < 0 ||
       InpBrokerUTCOffset < -14 || InpBrokerUTCOffset > 14 ||
       InpBrokerDSTRule < BROKER_DST_NONE || InpBrokerDSTRule > BROKER_DST_NZ ||
@@ -179,7 +179,7 @@ int OnInit()
       InpDaysToMonitor < 1 || InpDaysToMonitor > 30 ||
       InpBoxTransparency < 0 || InpBoxTransparency > 100)
    {
-      Print("Invalid sizing, break-even, ATR, magic, spread, timezone or monitoring inputs.");
+      Print("Invalid sizing, stop buffer, break-even, ATR, magic, spread, timezone or monitoring inputs.");
       return INIT_PARAMETERS_INCORRECT;
    }
    if(AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
@@ -586,7 +586,7 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
    bool allow_midpoint = !reversal && g_sessions[range.session].midpoint;
    double price = buy ? tick.ask : tick.bid;
    double stop = StopPrice((buy ? range.low : range.high) +
-                           (buy ? -1 : 1) * InpStopBufferPoints * _Point, tick_size, buy);
+                           (buy ? -1 : 1) * InpStopBufferPrice, tick_size, buy);
    double midpoint = StopPrice((range.high + range.low) / 2, tick_size, buy);
    double minimum_distance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
    if(stop <= 0 || midpoint <= 0 ||
@@ -829,7 +829,7 @@ void ProcessMidpointTriggers(const MqlTick &tick)
          continue;
       }
       double stop = StopPrice((buy ? g_ranges[i].low : g_ranges[i].high) +
-         (buy ? -1 : 1) * InpStopBufferPoints * _Point, tick_size, buy);
+         (buy ? -1 : 1) * InpStopBufferPrice, tick_size, buy);
       double distance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
       if(stop <= 0 || (buy ? tick.bid - stop : stop - tick.ask) < distance ||
          (buy ? stop >= tick.bid : stop <= tick.ask))

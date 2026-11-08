@@ -119,10 +119,17 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   signals. Missing history is retried within the current M5 candle; signals
   missed before history arrives are not traded late. The first M5 candle
   closing after startup can signal.
-- Both entries use initial SL **10 symbol points beyond the opposite M15
+- Both entries use initial SL **1.000 price units beyond the opposite M15
   range boundary**: below its low for buys, above its high for sells.
-  `InpStopBufferPoints` is adjustable. This is not a 10-point distance from
-  entry or an ATR initial stop. Prices round outward to tradable ticks.
+  `InpStopBufferPrice` is user-adjustable and defaults to `1.0`. For example,
+  range low 2700.000 gives a buy SL of 2699.000; range high 2710.000 gives a
+  sell SL of 2711.000. This is a buffer beyond the range, not a fixed distance
+  from entry or an ATR initial stop. Prices round outward to tradable ticks.
+  Version 1.07 replaces `InpStopBufferPoints` with a price-unit input: migrate
+  old presets using `price buffer = old points * symbol point size`. On the
+  3-digit gold symbol, old 10 points = 0.010 and new 1.000 = 1000 points.
+  Reload the updated preset and check this input after upgrading.
+  Wider buffers increase initial risk at fixed lots and also enlarge 1R/2R.
   Broker stop-distance violations reject the pair rather than widen the stop.
 - **R** is actual filled entry price minus the original protective stop distance
   (the reverse for sells). By default, a completed **M1 close at +1R** moves
@@ -165,7 +172,10 @@ python tools/sim_ea.py path/to/new_M1_export.csv --balance 1000 --lots 0.04
 
 Defaults match the current baseline: UTC+2 with EU DST, Asian/London enabled,
 NY and midpoint entries disabled, M1-close break-even at +1R, 50% exit at 2R,
-then 2x M15 ATR(14) trailing. Use `--verbose` for completed trade details.
+then 2x M15 ATR(14) trailing, with a 1.000 price-unit initial stop buffer.
+Use `--stop-buffer-price 0.01` to reproduce the old 10-point gold baseline,
+or another nonnegative price-unit buffer to compare stops. Use `--verbose`
+for completed trade details.
 The input is an MT5 tab-separated M1 export with spread in points.
 Instrument assumptions are 3 digits, 100 oz/lot and 0.01 minimum/step.
 
@@ -198,7 +208,7 @@ diagnostic. Each half must meet the broker's minimum lot size. The two
 risk-sized volumes may differ because their stop distances differ. Estimated
 combined margin and existing plus new directional exposure are checked.
 
-`InpATRPeriod`, `InpStopBufferPoints` and `InpTrailingATR` are optimizable inputs;
+`InpATRPeriod`, `InpStopBufferPrice` and `InpTrailingATR` are optimizable inputs;
 the ATR timeframe is always M15 and the 2R/50% rule is fixed. `InpMagic`
 identifies managed positions. `InpDeviationPoints` is in symbol points, not
 pips. `InpMaxSpreadPoints = 0` disables the optional entry spread filter.
