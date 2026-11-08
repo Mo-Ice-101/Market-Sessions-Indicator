@@ -1,5 +1,5 @@
 #property strict
-#property version "1.07"
+#property version "1.08"
 #property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
@@ -11,6 +11,7 @@ input bool InpEnableEA = true; // Enable new entries; existing positions remain 
 input bool InpShowSessionBoxes = true; // Automatically attach matching indicator on chart
 input int  InpBoxTransparency = 85; // Fill transparency 0-100; borders/levels stay visible
 input bool InpEnableM15Reversal = false; // 15M reversal strategy: one opposite entry after first closes, even after profit
+input bool InpDebugSignals = true; // Explain session signals and entry decisions in Experts / tester Journal
 
 enum PositionSizing
 {
@@ -112,6 +113,12 @@ void Warn(const string message)
       Print("Market Sessions EA: ", message);
       g_last_warning = TimeCurrent();
    }
+}
+
+void DebugSignal(const string message)
+{
+   if(InpDebugSignals)
+      Print("Market Sessions EA [debug] ", message);
 }
 
 bool ConfigureEASession(const int index, const string name, const bool enabled,
@@ -217,6 +224,16 @@ int OnInit()
    }
    if(!AttachSessionBoxes())
       return INIT_FAILED;
+   DebugSignal(StringFormat("Initialized %s: entries=%s Asian=%s London=%s NY=%s, server time=%s, broker UTC offset=%.2f DST rule=%d shift=%d min, buffer=%.5f, max spread=%d points, deviation=%I64u points; broker volume min=%.8f step=%.8f max=%.8f, tick size=%.8f stop level=%d freeze level=%d points, filling flags=%d.",
+      _Symbol, InpEnableEA ? "on" : "off", InpTradeAsian ? "on" : "off",
+      InpTradeLondon ? "on" : "off", InpTradeNY ? "on" : "off",
+      TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS), InpBrokerUTCOffset,
+      (int)InpBrokerDSTRule, InpBrokerDSTMinutes, InpStopBufferPrice, InpMaxSpreadPoints,
+      InpDeviationPoints, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN),
+      SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP), SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX),
+      SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE),
+      (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL),
+      (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL), (int)filling));
    Print("Market Sessions EA: explicit broker timezone UTC", InpBrokerUTCOffset,
          ", DST rule ", (int)InpBrokerDSTRule,
          ". Each entry uses the full risk/lot input; combined risk can be twice the setting.",
@@ -443,6 +460,9 @@ bool TradeResult(const bool sent, const string operation)
       Print(operation, " submitted but not yet filled; awaiting the broker order.");
       return false;
    }
+   DebugSignal(StringFormat("%s response: sent=%s retcode=%u (%s), order=%I64u deal=%I64u volume=%.8f price=%.5f.",
+      operation, sent ? "yes" : "no", code, g_trade.ResultRetcodeDescription(),
+      g_trade.ResultOrder(), g_trade.ResultDeal(), g_trade.ResultVolume(), g_trade.ResultPrice()));
    if(!sent || (code != TRADE_RETCODE_DONE && code != TRADE_RETCODE_DONE_PARTIAL))
    {
       Print(operation, " failed: ", code, " ", g_trade.ResultRetcodeDescription(),
@@ -549,6 +569,12 @@ bool SessionTradeState(const EASessionRange &range, ulong &first_id,
 void EnterTrades(const EASessionRange &range, const int direction, const MqlTick &tick,
                  const bool reversal = false)
 {
+   DebugSignal(StringFormat("%s %s candidate: session open=%s next open=%s direction=%s range=[%.5f, %.5f] bid=%.5f ask=%.5f spread=%.1f points.",
+      g_sessions[range.session].name, reversal ? "reversal" : "breakout",
+      TimeToString(range.start, TIME_DATE | TIME_MINUTES),
+      TimeToString(range.next_session, TIME_DATE | TIME_MINUTES),
+      direction > 0 ? "BUY" : "SELL", range.low, range.high, tick.bid, tick.ask,
+      (tick.ask - tick.bid) / _Point));
    if(!InpEnableEA)
    {
       Print(g_sessions[range.session].name, " breakout skipped: EA entries disabled.");
@@ -589,6 +615,9 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
                            (buy ? -1 : 1) * InpStopBufferPrice, tick_size, buy);
    double midpoint = StopPrice((range.high + range.low) / 2, tick_size, buy);
    double minimum_distance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   DebugSignal(StringFormat("%s entry check: price=%.5f stop=%.5f stop distance from executable quote=%.5f broker minimum=%.5f (%.1f points), midpoint=%s at %.5f, tick size=%.5f.",
+      g_sessions[range.session].name, price, stop, buy ? tick.bid - stop : stop - tick.ask,
+      minimum_distance, minimum_distance / _Point, allow_midpoint ? "on" : "off", midpoint, tick_size));
    if(stop <= 0 || midpoint <= 0 ||
       (buy ? tick.bid - stop : stop - tick.ask) < minimum_distance ||
       (allow_midpoint && ((buy ? midpoint - stop : stop - midpoint) < minimum_distance ||
@@ -605,6 +634,9 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
    if(!EntryVolume(buy, price, stop, equity, true, market_volume) ||
       (allow_midpoint && !EntryVolume(buy, midpoint, stop, equity, false, limit_volume)))
       return;
+   DebugSignal(StringFormat("%s sizing: mode=%s equity=%.2f requested market lots=%.8f midpoint lots=%.8f.",
+      g_sessions[range.session].name, InpSizing == SIZE_FIXED_LOTS ? "fixed" : "equity-percent",
+      equity, market_volume, limit_volume));
    double limit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
    if(limit > 0 &&
       DirectionalExposure(buy) + market_volume + limit_volume > limit + 1e-8)
@@ -621,6 +653,9 @@ void EnterTrades(const EASessionRange &range, const int direction, const MqlTick
       Print("Breakout pair skipped: insufficient margin or margin calculation failed. Error: ", GetLastError());
       return;
    }
+   DebugSignal(StringFormat("%s margin: market=%.2f midpoint=%.2f free=%.2f. Submitting once; no price retry.",
+      g_sessions[range.session].name, market_margin, limit_margin,
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE)));
    string comment = reversal ? "MSBR " + IntegerToString((long)range.start) :
                                SessionEntryComment(range.start, false);
    bool sent = buy ? g_trade.Buy(market_volume, _Symbol, 0, stop, 0, comment) :
@@ -1124,6 +1159,11 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
          continue;
       if(g_ranges[i].next_session <= tick.time)
       {
+         if(g_ranges[i].start >= g_start_bar)
+            DebugSignal(StringFormat("%s session opened %s expired at %s without an eligible entry signal.",
+               g_sessions[g_ranges[i].session].name,
+               TimeToString(g_ranges[i].start, TIME_DATE | TIME_MINUTES),
+               TimeToString(g_ranges[i].next_session, TIME_DATE | TIME_MINUTES)));
          g_ranges[i].evaluated = true;
          continue;
       }
@@ -1139,6 +1179,12 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
             continue;
          }
          g_ranges[i].loaded = true;
+         DebugSignal(StringFormat("%s opening M15 complete: session open=%s range end=%s high=%.5f low=%.5f; awaiting M5 close outside range until next open %s.",
+            g_sessions[g_ranges[i].session].name,
+            TimeToString(g_ranges[i].start, TIME_DATE | TIME_MINUTES),
+            TimeToString(g_ranges[i].end, TIME_DATE | TIME_MINUTES),
+            g_ranges[i].high, g_ranges[i].low,
+            TimeToString(g_ranges[i].next_session, TIME_DATE | TIME_MINUTES)));
       }
       MqlRates rates[];
       if(CopyRates(_Symbol, PERIOD_M5, g_ranges[i].end, current_bar - 1, rates) <= 0 ||
@@ -1153,11 +1199,23 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
       int direction = FindOpeningBreak(rates, g_ranges[i].end, g_ranges[i].next_session, current_bar,
                                        g_ranges[i].high, g_ranges[i].low, confirmation);
       if(direction == 0)
+      {
+         if(g_ranges[i].start >= g_start_bar && ArraySize(rates) > 0)
+            DebugSignal(StringFormat("%s no breakout: M5 bar=%s close=%.5f, range low=%.5f high=%.5f (close must be strictly outside).",
+               g_sessions[g_ranges[i].session].name,
+               TimeToString(rates[ArraySize(rates) - 1].time, TIME_DATE | TIME_MINUTES),
+               rates[ArraySize(rates) - 1].close, g_ranges[i].low, g_ranges[i].high));
          continue;
+      }
       g_ranges[i].evaluated = true;
       // Historical signals are consumed, never entered late or replayed after restart.
       if(confirmation == current_bar - PeriodSeconds(PERIOD_M5))
          EnterTrades(g_ranges[i], direction, tick);
+      else
+         DebugSignal(StringFormat("%s historical breakout at %s was not traded: EA only enters the immediately preceding M5 confirmation; current M5=%s.",
+            g_sessions[g_ranges[i].session].name,
+            TimeToString(confirmation, TIME_DATE | TIME_MINUTES),
+            TimeToString(current_bar, TIME_DATE | TIME_MINUTES)));
    }
    if(ready)
       g_last_signal_bar = current_bar;
@@ -1186,6 +1244,8 @@ void OnTick()
    {
       g_start_bar = current_bar;
       g_last_signal_bar = current_bar;
+      DebugSignal(StringFormat("Starting at M5 bar %s; historical confirmations are not traded. No entries until a later completed confirmation.",
+         TimeToString(current_bar, TIME_DATE | TIME_MINUTES)));
       return;
    }
    if(current_bar > g_start_bar && current_bar != g_last_signal_bar)

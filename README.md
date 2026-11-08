@@ -215,6 +215,33 @@ pips. `InpMaxSpreadPoints = 0` disables the optional entry spread filter.
 Sizing excludes commissions, swap and gaps; actual execution and stop fills
 can exceed the intended risk budget.
 
+### Diagnosing missed entries
+
+`InpDebugSignals` defaults to `true` and prints messages prefixed
+`Market Sessions EA [debug]` in MT5's **Toolbox > Experts** tab; in Strategy
+Tester use its **Journal** tab. Turn it off to reduce logging. On startup the
+EA records the enabled sessions, broker-time settings, spread/deviation limits
+and broker volume, stop, freeze and filling specifications. During enabled
+sessions it records the M15 range, each checked M5 close that does not break
+the range, historical signals ignored after startup, entry quote/stop and
+broker minimum stop distance, sizing, margin and broker response. Existing
+warnings and rejection codes remain visible even when debug is disabled.
+
+Logs are produced only while the EA is running and receiving ticks; they cannot
+explain a prior missed trade if the relevant logs were not recorded. Check the
+EA was attached and Algo Trading was enabled, then provide the Experts/Journal
+messages around the session opening and confirmation in broker server time.
+NY is disabled by the supplied preset. The next session opening, even if that
+session is disabled, ends monitoring of the preceding range.
+
+The EA respects broker minimum/step/maximum and directional volume limits,
+supported FOK/IOC filling modes and stop distances. Fixed lots must be valid
+and split into two valid 50% halves; percentage sizing rounds down, never up.
+If constraints fail, the EA skips rather than widening the stop or increasing
+volume/risk. The order is submitted once per signal; it does not retry rejected
+orders or promise a better fill. Broker rejection codes and descriptions are
+logged; stop/freeze constraints can change.
+
 ### EA verification in MetaTrader 5
 
 Compile both the EA and indicator after installing the shared header. For
