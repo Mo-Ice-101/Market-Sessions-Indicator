@@ -1,6 +1,7 @@
 # Gold Desk conversation handoff
 
 Saved on 2026-11-07 at the user's request so work can resume in a later session.
+Last updated on 2026-11-09.
 This is a condensed record of decisions and outstanding work, not a verbatim
 chat transcript.
 
@@ -28,7 +29,7 @@ Confirmed broker symbols:
 
 ```text
 Gold: XAUUSD_r (updated 2026-11-09; previous demo symbol was XAUUSD_i)
-USD index: DXYUSD
+USD index: initially DXYUSD; confirm the real-account symbol saved by setup
 USD orientation: higher index price means stronger USD (no inversion)
 ```
 
@@ -119,9 +120,9 @@ Public-news coverage includes GDELT and Fed, ECB, BLS and BEA RSS. There is no
 exhaustive global coverage, future economic-event calendar, consensus-surprise
 data, or automated trade/news-blocking integration.
 
-## Where we stopped
+## Earlier dashboard feedback
 
-It was Saturday, 2026-11-07. The user agreed to wait until the market reopens
+On Saturday, 2026-11-07, the user agreed to wait until the market reopens
 before assessing fresh-price behavior. Last screenshots showed:
 
 - Main card: Waiting For Analysis.
@@ -139,20 +140,125 @@ not a missing session caption. We explicitly acknowledged:
 - There is no prominent next-assessment time/countdown, popup, or sound alert.
 - Historical market changes are not forecasts.
 
-These interface improvements were discussed but have **not** been implemented.
+The prominent schedule/countdown, scan-progress and weekend-status improvements
+have **not** been implemented. Readable AI predictions were subsequently added
+as described below.
+
+## Readable AI predictions (2026-11-09)
+
+The user explicitly wanted to read the AI's prediction and reasoning, separately
+from the EA. The dashboard now prominently shows UP bias, DOWN bias, No clear
+direction or Insufficient evidence, with reasons, opposing evidence and an
+invalidation condition. Observed market changes are labeled as not predictions.
+Evidence and AI-completion timestamps, model, article references and source
+warnings are displayed.
+
+Ollama now receives a structured JSON schema with permitted article IDs.
+Unsupported references are still rejected locally. Failed news retrieval must
+not be described as proof that no market-moving news exists. Added an official
+Fed monetary-policy RSS fallback when the all-releases feed fails; it has
+narrower coverage and is labeled accordingly.
+
+These changes are on `feat/gold-news-agent`, implementation commit `cc26974`.
+The Python suite passed 53 tests, including Streamlit AppTest. Successful live
+inference with the new schema still needs confirmation on Windows.
+
+Evaluation caveat: the one-hour baseline is the evidence's completed M5 close,
+not the time inference finishes. Slow inference can consume part of that hour,
+and the recorded forecast creation time currently uses scan start. Correct
+availability timestamps/baselines before treating this as an actionable,
+leakage-aware performance evaluation.
+
+## EA breakout timeframes and comparison (2026-11-09)
+
+The original initial breakout entry used an M5 candle close strictly outside
+the opening M15 high/low, not M1. M1 is used for early break-even at +1R.
+The opening range remains M15 regardless of the entry or chart timeframe.
+
+At the user's request, added independent M5/M15 dropdowns:
+`InpAsianBreakEntryTF`, `InpLondonBreakEntryTF`, `InpNYBreakEntryTF`.
+All default to M5. Asian M5 / London M15 is now selectable; it is not the
+default. New York EA trading remains disabled, and its selector cannot enable
+trading. Desk New York analysis remains enabled independently.
+
+EA, indicator, shared helpers, simulator, documentation and tests were updated.
+Commit `170c8ee` was pushed to both `feat/opening-range-hedging-ea` and
+`feat/backtest-entry-timeframes`. These changes are on those branches, not the
+Gold Desk branch. The existing saved preset was not rewritten.
+
+To install: pull the intended branch, copy the updated EA, indicator and shared
+header to the appropriate MT5 folders, and compile both programs. Git updates
+alone do not update installed EX5 files. The user previously missed changes
+because GitHub Desktop still showed pending pulls. Native MT5 compilation and
+visual verification remain outstanding; 10 portable tests passed.
+
+Approximate replay on the included July 22-October 30 gold history used $1,000
+starting balance, fixed 0.04 lots, Asian/London enabled, New York/midpoints/
+reversals disabled, Europe broker DST and a 1.000 stop buffer:
+
+| Entry selection | Trades | Net | Profit factor | Max drawdown |
+| --- | ---: | ---: | ---: | ---: |
+| Both M5 | 145 | +1686.37 | 1.64 | 17.7% |
+| Both M15 | 145 | +1340.27 | 1.43 | 20.1% |
+| Asian M5 / London M15 | 145 | +1761.69 | 1.67 | 17.7% |
+
+This is an approximate price-based EA replay, not an AI backtest, live result
+or out-of-sample validation. It excludes commissions, swaps and margin effects.
+
+## Where we stopped: different boxes between brokers
+
+The user loaded the EA at another broker and reported different session boxes
+despite identical inputs and both servers being physically located in South
+Africa. Screenshots showed both configured as
+`Broker UTC+02:00 | DST: Europe (manual/tester)`, but their server clocks differed.
+The user then confirmed simultaneous Market Watch times:
+
+- Correctly aligned broker: 10:41.
+- Incorrectly aligned broker: 08:41.
+
+This confirms a two-hour server-clock difference, not identical timezones.
+Physical server location does not establish its trading-clock UTC offset.
+Applying the same manual offset to both can select different opening candles
+and shift entries as well as boxes.
+
+Advice given: if the correct broker's UTC+2 configuration is accurate, change
+the incorrect broker's EA `InpBrokerUTCOffset` from `2.0` to `0.0`, without
+changing the session opening inputs. At the conversation timestamp
+2026-11-09 08:47 UTC, the reported clocks are consistent with UTC+2 and UTC+0.
+The new broker's daylight-saving policy is still unconfirmed; do not assume
+Europe DST or no DST solely from today's clocks.
+
+The EA explicitly converts session UTC times using its configured broker
+standard offset and DST rule. It passes those settings to its attached boxes
+indicator and disables automatic offset detection there. Adjusting only a
+standalone indicator does not correct EA scheduling.
+
+The screenshots used M15 and M30 chart displays, but opening-range data is
+explicitly M15, so display timeframe is not the cause. Broker feed OHLC and
+spread differences may remain after time alignment.
+
+No code change was made for this discrepancy. The user has not yet confirmed
+applying the offset correction or matching boxes afterward.
 
 ## Next-session priorities
 
-1. Validate the running Desk during actual market hours: intended MT5 terminal,
+1. Confirm the new broker's offset correction, actual DST policy and installed
+   EA/indicator versions. Compare the same UTC opening M15 candle on both feeds
+   after correction; keep session reference hours unchanged.
+2. Verify MT5 compilation and the per-session M5/M15 inputs on the EA branch,
+   keeping New York trading disabled.
+3. Validate the running Desk during actual market hours: intended MT5 terminal,
    fresh aligned gold/USD bars, news-source health, successful local AI output,
    and one-hour forecast persistence/outcome scoring.
-2. Make current session, analysis readiness/blocked reason, last successful
+4. Correct forecast availability timestamps/baselines before interpreting
+   forward scores as actionable results.
+5. Make current session, analysis readiness/blocked reason, last successful
    assessment time and scan progress prominent. Distinguish scheduled eligibility
    from a verified live market. Do not imply an exact prediction time if inference
    duration is unknown.
-3. Evaluate session-specific forecasts honestly before connecting anything to
+6. Evaluate session-specific forecasts honestly before connecting anything to
    trading. No EA integration or trade blocking has been approved.
-4. Clarify the separate historical backtesting requirement if the user wants to
+7. Clarify the separate historical AI backtesting requirement if the user wants to
    pursue it: it needs appropriate historical evidence and leakage-aware replay,
    not merely the gold-price CSV.
 
@@ -161,7 +267,5 @@ have limited deduplication retention, but forecasts remain in SQLite. Hosting,
 authentication, data sync, notification delivery and disk-retention controls
 are not implemented.
 
-The latest implementation changes passed 50 deterministic Python tests and
-compilation checks. A local Streamlit HTTP health endpoint was also checked.
-Those checks do not establish trading usefulness, forecast calibration or
-complete live-source reliability.
+The checks above do not establish trading usefulness, forecast calibration,
+native MT5 compatibility or complete live-source reliability.
