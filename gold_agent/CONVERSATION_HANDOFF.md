@@ -27,10 +27,15 @@ C:\Program Files\Weltrade MT5 Demo\terminal64.exe
 Confirmed broker symbols:
 
 ```text
-Gold: XAUUSD_i
+Gold: XAUUSD_r (updated 2026-11-09; previous demo symbol was XAUUSD_i)
 USD index: DXYUSD
 USD orientation: higher index price means stronger USD (no inversion)
 ```
+
+On 2026-11-09 the user reported the real-account gold symbol is `XAUUSD_r`
+and reconfirmed the same `C:\Program Files\Weltrade MT5 Demo` installation
+path. The launcher preset was updated; the terminal path remains unchanged.
+Live connection still needs confirmation on the user's Windows machine.
 
 Ollama and the local `qwen2.5:7b` model are installed on the user's machine.
 The model download was approximately 4.7 GB.

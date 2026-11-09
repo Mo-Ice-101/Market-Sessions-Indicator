@@ -11,10 +11,13 @@ price predictions. It runs independently; its reports are not drawn on the MT5 c
 Open MT5 and log into your broker, then double-click **`Start_Gold_Agent.cmd`**
 in this folder. It creates the Python environment if missing, installs the MT5
 connector and Streamlit dashboard only when an import fails, and presets gold
-to **`XAUUSD_i`**.
+to **`XAUUSD_r`**, the confirmed real-account gold symbol.
 Startup and every scan use the explicit terminal
 `C:\Program Files\Weltrade MT5 Demo\terminal64.exe`, avoiding automatic selection
 when multiple MT5 installations are present. Keep that terminal logged in.
+The installation folder name contains "Demo"; the user confirmed that this
+same installation is used for the real-account symbol. The launcher does not
+switch accounts or place trades.
 If it moves, update `MT5_PATH` in `launcher.py`; a missing executable stops startup.
 On first run, choose your exact USD comparison symbol and its orientation.
 The choices and local model name are saved in git-ignored `data/startup.json`;

@@ -13,7 +13,7 @@ class LauncherTests(unittest.TestCase):
         return {"usd_symbol": "EURUSD_i", "usd_inverse": True, "model": "qwen2.5:7b"}
 
     def test_gold_symbol_matches_broker(self):
-        self.assertEqual(launcher.GOLD_SYMBOL, "XAUUSD_i")
+        self.assertEqual(launcher.GOLD_SYMBOL, "XAUUSD_r")
 
     def test_terminal_path_matches_requested_installation(self):
         self.assertEqual(str(launcher.MT5_PATH),
@@ -23,7 +23,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(launcher.validate_settings(self.settings()), self.settings())
 
     def test_invalid_settings_rejected(self):
-        for field, value in (("usd_symbol", "XAUUSD_i"), ("usd_symbol", ""),
+        for field, value in (("usd_symbol", "XAUUSD_r"), ("usd_symbol", ""),
                              ("usd_inverse", "false"), ("model", "-invalid"),
                              ("model", "something:cloud")):
             settings = self.settings()
@@ -33,7 +33,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_first_run_requires_exact_symbol_and_orientation(self):
         mt5 = types.SimpleNamespace(symbols_get=lambda: [
-            types.SimpleNamespace(name="EURUSD_i"), types.SimpleNamespace(name="XAUUSD_i")
+            types.SimpleNamespace(name="EURUSD_i"), types.SimpleNamespace(name="XAUUSD_r")
         ])
         with tempfile.TemporaryDirectory() as folder, \
                 patch("builtins.input", side_effect=["unknown", "EURUSD_i", "bad", "2", ""]):

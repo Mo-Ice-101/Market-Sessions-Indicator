@@ -11,7 +11,7 @@ import webbrowser
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parent
-GOLD_SYMBOL = "XAUUSD_i"
+GOLD_SYMBOL = "XAUUSD_r"
 MT5_PATH = Path(r"C:\Program Files\Weltrade MT5 Demo\terminal64.exe")
 
 
