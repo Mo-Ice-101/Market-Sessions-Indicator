@@ -1,14 +1,13 @@
 #property strict
-#property version "1.09"
+#property version "1.10"
 #property description "Opening M15 / selectable M5-M15 breakout entries, 50% at 2R, ATR trail."
-#property tester_indicator "Market_Sessions_Boxes.ex5"
 
 #include <Trade/Trade.mqh>
 #include "Market_Sessions_Core.mqh"
 
 input group "EA Control"
 input bool InpEnableEA = true; // Enable new entries; existing positions remain managed
-input bool InpShowSessionBoxes = true; // Automatically attach matching indicator on chart
+input bool InpShowSessionBoxes = true; // Draw built-in session boxes, levels and confirmation arrows
 input int  InpBoxTransparency = 85; // Fill transparency 0-100; borders/levels stay visible
 input bool InpEnableM15Reversal = false; // 15M reversal strategy: one opposite entry after first closes, even after profit
 input bool InpDebugSignals = true; // Explain session signals and entry decisions in Experts / tester Journal
@@ -95,9 +94,6 @@ CTrade g_trade;
 EASession g_sessions[3];
 EASessionRange g_ranges[];
 int g_atr = INVALID_HANDLE;
-int g_visual_indicator = INVALID_HANDLE;
-string g_visual_name = "";
-bool g_visual_attached = false;
 datetime g_day = 0;
 datetime g_start_bar = 0;
 datetime g_last_signal_bar = 0;
@@ -141,36 +137,6 @@ bool ConfigureEASession(const int index, const string name, const bool enabled,
    g_sessions[index].enabled = enabled;
    g_sessions[index].midpoint = midpoint;
    g_sessions[index].open_minutes = open_hour * 60 + open_minute;
-   return true;
-}
-
-bool AttachSessionBoxes()
-{
-   if(!InpShowSessionBoxes ||
-      (MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_VISUAL_MODE)))
-      return true;
-   g_visual_name = StringFormat("MSB EA %I64u %I64u", InpMagic, GetMicrosecondCount());
-   g_visual_indicator = iCustom(_Symbol, _Period, "Market_Sessions_Boxes",
-      InpBrokerUTCOffset, InpBrokerDSTRule, InpBrokerDSTMinutes, false,
-      InpAsianOpenHour, InpAsianOpenMin, InpAsianCloseHour, InpAsianCloseMin, InpBoxTransparency,
-      InpLondonOpenHour, InpLondonOpenMin, InpLondonCloseHour, InpLondonCloseMin, InpBoxTransparency,
-      InpNYOpenHour, InpNYOpenMin, InpNYCloseHour, InpNYCloseMin, InpBoxTransparency,
-      true, true, 1, InpDaysToMonitor, g_visual_name,
-      InpAsianBreakEntryTF, InpLondonBreakEntryTF, InpNYBreakEntryTF);
-   if(g_visual_indicator == INVALID_HANDLE)
-   {
-      Print("Cannot load session boxes. Compile Market_Sessions_Boxes.mq5 with ",
-            "Market_Sessions_Core.mqh in MQL5/Indicators, then reattach the EA. Error: ",
-            GetLastError());
-      return false;
-   }
-   if(!ChartIndicatorAdd(ChartID(), 0, g_visual_indicator))
-   {
-      Print("Cannot attach session boxes to the EA chart. Error: ", GetLastError());
-      return false;
-   }
-   g_visual_attached = true;
-   ChartRedraw();
    return true;
 }
 
@@ -233,8 +199,9 @@ int OnInit()
       Print("EA requires immediate FOK or IOC order filling. Error: ", GetLastError());
       return INIT_FAILED;
    }
-   if(!AttachSessionBoxes())
+   if(!InitEAVisuals())
       return INIT_FAILED;
+   UpdateEAVisuals(TimeCurrent());
    DebugSignal(StringFormat("Initialized %s: entries=%s Asian=%s London=%s NY=%s, server time=%s, broker UTC offset=%.2f DST rule=%d shift=%d min, buffer=%.5f, max spread=%d points, deviation=%I64u points; broker volume min=%.8f step=%.8f max=%.8f, tick size=%.8f stop level=%d freeze level=%d points, filling flags=%d.",
       _Symbol, InpEnableEA ? "on" : "off", InpTradeAsian ? "on" : "off",
       InpTradeLondon ? "on" : "off", InpTradeNY ? "on" : "off",
@@ -249,6 +216,11 @@ int OnInit()
          ", DST rule ", (int)InpBrokerDSTRule,
          ". Each entry uses the full risk/lot input; combined risk can be twice the setting.",
          " RSI is display-only. Use a demo account first.");
+   Print("Market Sessions EA 1.10: built-in boxes; Asian=",
+         EnumToString(g_sessions[0].break_timeframe), " London=",
+         EnumToString(g_sessions[1].break_timeframe), " NY=",
+         EnumToString(g_sessions[2].break_timeframe),
+         ". Box colors/arrows mark confirmations, not guaranteed fills.");
    if(!InpEnableEA)
       Print("EA entries disabled: midpoint orders will be cancelled; existing trades remain managed.");
    return INIT_SUCCEEDED;
@@ -257,17 +229,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   if(g_visual_attached)
-   {
-      if(!ChartIndicatorDelete(ChartID(), 0, g_visual_name))
-         Print("Cannot remove EA-owned session indicator. Error: ", GetLastError());
-      g_visual_attached = false;
-   }
-   if(g_visual_indicator != INVALID_HANDLE)
-   {
-      IndicatorRelease(g_visual_indicator);
-      g_visual_indicator = INVALID_HANDLE;
-   }
+   DestroyEAVisuals();
    if(g_atr != INVALID_HANDLE)
       IndicatorRelease(g_atr);
 }
@@ -303,8 +265,6 @@ bool RebuildRanges(const datetime now)
       datetime midnight = today - day * 86400;
       for(int s = 0; s < 3; s++)
       {
-         if(!g_sessions[s].enabled)
-            continue;
          datetime open_ref = midnight + g_sessions[s].open_minutes * 60;
          EASessionRange range = {};
          range.session = s;
@@ -697,7 +657,8 @@ void ProcessM15Reversals(const MqlTick &tick)
       return;
    for(int i = 0; i < ArraySize(g_ranges); i++)
    {
-      if(g_ranges[i].reversal_attempted || closed <= g_ranges[i].end ||
+      if(!g_sessions[g_ranges[i].session].enabled ||
+         g_ranges[i].reversal_attempted || closed <= g_ranges[i].end ||
          tick.time >= g_ranges[i].next_session)
          continue;
       ulong first_id;
@@ -815,7 +776,8 @@ void ProcessMidpointTriggers(const MqlTick &tick)
       return;
    for(int i = 0; i < ArraySize(g_ranges); i++)
    {
-      if(g_ranges[i].second_attempted || !g_sessions[g_ranges[i].session].midpoint ||
+      if(!g_sessions[g_ranges[i].session].enabled ||
+         g_ranges[i].second_attempted || !g_sessions[g_ranges[i].session].midpoint ||
          tick.time < g_ranges[i].end || tick.time >= g_ranges[i].next_session)
          continue;
       ulong first_id;
@@ -909,6 +871,7 @@ void ProcessMidpointTriggers(const MqlTick &tick)
 void OnTimer()
 {
    CancelLegacyMidpointOrders();
+   UpdateEAVisuals(TimeCurrent());
 }
 
 // Recover original risk and scale-out progress from broker history, including after restart.
@@ -1166,7 +1129,7 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
    bool ready = true;
    for(int i = 0; i < ArraySize(g_ranges); i++)
    {
-      if(g_ranges[i].evaluated)
+      if(!g_sessions[g_ranges[i].session].enabled || g_ranges[i].evaluated)
          continue;
       if(g_ranges[i].next_session <= tick.time)
       {
@@ -1208,17 +1171,14 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
             TimeToString(g_ranges[i].next_session, TIME_DATE | TIME_MINUTES)));
       }
       MqlRates rates[];
-      if(CopyRates(_Symbol, timeframe, g_ranges[i].end, signal_bar - 1, rates) <= 0 ||
-         !SeriesInfoInteger(_Symbol, timeframe, SERIES_SYNCHRONIZED) ||
-         SeriesInfoInteger(_Symbol, timeframe, SERIES_FIRSTDATE) > g_ranges[i].end)
+      datetime confirmation;
+      int direction;
+      if(!ReadRangeBreak(g_ranges[i], signal_bar, rates, confirmation, direction))
       {
          Warn(EnumToString(timeframe) + " confirmation history is unavailable; waiting.");
          ready = false;
          continue;
       }
-      datetime confirmation;
-      int direction = FindOpeningBreak(rates, g_ranges[i].end, g_ranges[i].next_session, signal_bar,
-                                       g_ranges[i].high, g_ranges[i].low, confirmation, timeframe);
       if(direction == 0)
       {
          if(g_ranges[i].start >= g_start_bar && ArraySize(rates) > 0)
@@ -1256,6 +1216,7 @@ void OnTick()
    }
    bool legacy_clear = CancelLegacyMidpointOrders();
    ManagePositions(tick);
+   UpdateEAVisuals(tick.time);
    if(!legacy_clear)
       return;
    ProcessMidpointTriggers(tick);
@@ -1276,4 +1237,26 @@ void OnTick()
    if(current_bar > g_start_bar && current_bar != g_last_signal_bar)
       ProcessSignals(current_bar, tick);
    ProcessM15Reversals(tick);
+}
+
+bool ReadRangeBreak(const EASessionRange &range, const datetime now,
+                    MqlRates &rates[], datetime &confirmation, int &direction)
+{
+   ENUM_TIMEFRAMES timeframe = g_sessions[range.session].break_timeframe;
+   if(CopyRates(_Symbol, timeframe, range.end, now - 1, rates) <= 0 ||
+      !SeriesInfoInteger(_Symbol, timeframe, SERIES_SYNCHRONIZED) ||
+      SeriesInfoInteger(_Symbol, timeframe, SERIES_FIRSTDATE) > range.end)
+      return false;
+   direction = FindOpeningBreak(rates, range.end, range.next_session, now,
+                                range.high, range.low, confirmation, timeframe);
+   return true;
+}
+
+#include "Market_Sessions_EA_Visuals.mqh"
+
+void OnChartEvent(const int id, const long &lparam,
+                  const double &dparam, const string &sparam)
+{
+   if(id == CHARTEVENT_CHART_CHANGE && g_ea_visuals_ready)
+      RenderEAVisualFills();
 }

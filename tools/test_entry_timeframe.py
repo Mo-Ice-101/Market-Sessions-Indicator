@@ -59,16 +59,15 @@ class EntryTimeframeTests(unittest.TestCase):
 
     def test_ea_and_visuals_share_session_timeframes(self):
         ea = (ROOT / "Market_Sessions_EA.mq5").read_text()
-        indicator = (ROOT / "Market_Sessions_Boxes.mq5").read_text()
+        visuals = (ROOT / "Market_Sessions_EA_Visuals.mqh").read_text()
         for session in ("Asian", "London", "NY"):
             self.assertIn(
                 f"input BreakEntryTimeframe Inp{session}BreakEntryTF = BREAK_ENTRY_M5;", ea
             )
-            self.assertIn(
-                f"input BreakEntryTimeframe Inp{session}BreakEntryTF = BREAK_ENTRY_M5;", indicator
-            )
         self.assertIn("input bool InpTradeNY = false;", ea)
-        self.assertIn("InpAsianBreakEntryTF, InpLondonBreakEntryTF, InpNYBreakEntryTF);", ea)
+        self.assertIn('g_sessions[range.session].break_timeframe', visuals)
+        self.assertIn("ReadRangeBreak(range, now, rates, confirmation, direction)", visuals)
+        self.assertIn("ReadRangeBreak(g_ranges[i], signal_bar, rates, confirmation, direction)", ea)
         self.assertIn("confirmation + seconds > g_start_bar", ea)
         self.assertIn("tick.time < signal_bar + PeriodSeconds(PERIOD_M5)", ea)
 

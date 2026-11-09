@@ -1,39 +1,46 @@
 # Market-Sessions-Indicator
-MQL5 opening-M15 range indicator with M5 breakout colors, high/midpoint/low
-levels to the next session, and a two-entry hedging-account EA.
+MQL5 opening-M15 breakout EA with built-in session boxes, per-session M5/M15
+confirmation, high/midpoint/low levels and hedging-account trade management.
 
 ## Installation
 
 1. In MetaTrader 5, select **File → Open Data Folder**.
-2. Copy `Market_Sessions_Boxes.mq5` into `MQL5/Indicators`.
-3. Copy `Market_Sessions_Core.mqh` into the same directory as the indicator.
-   Open the indicator in MetaEditor and compile with **F7**. The included
+2. Copy `Market_Sessions_EA.mq5`, `Market_Sessions_Core.mqh` and
+   `Market_Sessions_EA_Visuals.mqh` together into `MQL5/Experts`.
+3. Open `Market_Sessions_EA.mq5` in MetaEditor and compile with **F7**. The included
    `Canvas/Canvas.mqh` is part of MT5's standard library; no downloads are needed.
-4. Refresh **Navigator → Indicators** and attach **Market Sessions Boxes** to a chart.
+4. Refresh **Navigator → Expert Advisors** and attach **Market_Sessions_EA**.
+   Configure times, broker timezone and entry timeframes once, in EA Inputs.
+   No separate boxes indicator or indicator compilation is required.
 
 ## Expert Advisor
 
-`Market_Sessions_EA.mq5` is a separate trading EA; the indicator remains available.
-Both use `Market_Sessions_Core.mqh` for regional DST, opening M15 ranges and M5 breakout
-confirmation. With `InpShowSessionBoxes=true` (default), the EA automatically
-attaches a uniquely named copy of the indicator to its live/visual-tester chart.
-It passes its broker timezone, session times and history settings, with automatic
-offset detection off, so visuals match EA signals. All three sessions are drawn,
+As of **EA 1.10**, boxes are compiled directly into `Market_Sessions_EA.ex5`.
+`Market_Sessions_EA_Visuals.mqh` is a compile-time implementation header, not a
+separately installed program. Drawing reads the EA's session ranges and selected
+confirmation timeframe and uses the same breakout reader as trading. There is
+no second timezone, schedule or timeframe configuration to maintain.
+With `InpShowSessionBoxes=true` (default), all three sessions are drawn,
 even if their trading entry switches are off. `InpBoxTransparency` defaults to
 85 (range 0-100). Boxes, levels, arrows, RSI and timezone labels remain visible
-when `InpEnableEA=false`. No drawing indicator is loaded in nonvisual backtests.
+when `InpEnableEA=false`. Drawing is skipped in nonvisual backtests.
 
-Compile **both** source files after syncing. The compiled
-`MQL5/Indicators/Market_Sessions_Boxes.ex5` is required when chart visuals are
-enabled; a missing indicator produces an initialization error rather than
-silently running without boxes. Set `InpShowSessionBoxes=false` only if you
-deliberately want no automatic visuals or already attach an indicator manually.
-Removing/reconfiguring the EA removes only its own indicator instance, not
-manually attached copies.
+The EA no longer loads `Market_Sessions_Boxes.ex5` through `iCustom`. On startup
+it removes legacy boxes indicators with the standard `Market Sessions Boxes`
+or old `MSB EA ...` short name from its chart, logging each removal; other
+indicators such as moving averages are untouched. A custom-named legacy copy
+should be removed manually. Do not attach a standalone boxes indicator to this
+EA's chart. Removing/reconfiguring the EA cleans up only its own drawing objects
+and canvas. Set `InpShowSessionBoxes=false` only to deliberately hide its visuals.
 
-Copy the EA and `Market_Sessions_Core.mqh` together into `MQL5/Experts`, then
-compile the EA with F7. Run it in Strategy Tester and on a demo account before
-enabling live algorithmic trading.
+Save your EA inputs before upgrading and verify them afterward. Reattaching,
+recompiling or changing inputs does not replay earlier breakout entries.
+Confirm **EA 1.10**, the selected session timeframes in the chart's status label,
+and the initialization message in Experts. Box colors/arrows show confirmed
+breakouts, including historical or entry-disabled sessions; they do not prove
+that a trade was filled. A box appears only after the opening M15 closes and
+changes color only after a selected M5/M15 close strictly outside its range.
+Run in Strategy Tester and on a demo account before enabling live trading.
 
 ### Enable or disable EA entries
 
@@ -43,8 +50,9 @@ next tick/timer event. Cancellation requires connectivity and algorithmic
 trading permission; rejected cancellations are logged and retried.
 Existing filled positions continue their independent 2R exits, break-even
 and ATR trailing for safety, even while entries are disabled.
-For indicator-only use with no EA management, attach only
-`Market_Sessions_Boxes.mq5`; the indicator never places trades.
+The standalone `Market_Sessions_Boxes.mq5` source is retained for legacy
+indicator-only use with no EA management. It is not part of the EA installation
+and must not be used to configure this EA's boxes.
 
 ### Sync the MQL5 source locally
 
@@ -53,10 +61,10 @@ git clone --branch feat/opening-range-hedging-ea https://github.com/Mo-Ice-101/M
 ```
 
 For an existing checkout on this branch, use `git pull --ff-only`.
-Copy `Market_Sessions_Boxes.mq5` and `Market_Sessions_Core.mqh` together into
-`MQL5/Indicators`, and `Market_Sessions_EA.mq5` and the header together into
-`MQL5/Experts`. Recopy after pulling updates, then compile both `.mq5` files
-in MetaEditor with F7. Git pull alone does not update the terminal folders.
+Copy `Market_Sessions_EA.mq5`, `Market_Sessions_Core.mqh` and
+`Market_Sessions_EA_Visuals.mqh` together into `MQL5/Experts`. Recopy after pulling
+updates, then compile **only the EA** in MetaEditor with F7. Only the resulting
+EA EX5 is needed at runtime. Git pull alone does not update the terminal folders.
 
 ### Entry and management
 
@@ -67,17 +75,17 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   default is `BROKER_DST_EUROPE` (UTC+2 winter / UTC+3 summer). Schedules and
   reference timezones match the indicator. The EA requires an **explicit broker
   standard UTC offset and DST rule** in both live trading and backtesting;
-  it does not learn offsets from the live clock. For matching visuals, disable
-  automatic detection on the indicator and use the same timezone inputs.
+  it does not learn offsets from the live clock. Built-in visuals use these same
+  inputs automatically. Broker server location does not establish its timezone.
 - Each session has a **Break Entry TF** dropdown: `InpAsianBreakEntryTF`,
   `InpLondonBreakEntryTF` and `InpNYBreakEntryTF`. Choose **M5** or **M15**;
   all default to **M5**. To use the compared mixed configuration, choose Asian
   M5 and London M15 in EA Inputs. NY remains disabled unless `InpTradeNY` is
   explicitly enabled; selecting a NY timeframe never enables NY trading.
   The opening range stays M15, and break-even, ATR, midpoint and optional
-  reversal management are unchanged. EA-attached box colors/arrows use the
-  same per-session selections. Recopy the shared header and recompile **both**
-  EA and indicator after updating. Existing presets without these fields use
+  reversal management are unchanged. Built-in box colors/arrows use the
+  same per-session selections. Recopy both headers and recompile the EA after
+  updating. Existing presets without these fields use
   the M5 defaults on a fresh attachment; verify selections after loading inputs.
 - After the first complete M15 candle at/after a session opening, the first
   subsequent selected M5/M15 close strictly above/below that candle's range confirms a
@@ -96,7 +104,8 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   permits one opposite market entry after the first breakout position fully
   closes, including after profit or loss. A completed M15 close must be strictly
   beyond the opposite opening-range boundary, after the first position's exit
-  and before the next scheduled session opens. Initial entries remain M5-based.
+  and before the next scheduled session opens. Initial entries use the selected
+  per-session M5/M15 timeframe.
   This option intentionally overrides the profit lock for the reversal only.
   If a midpoint entry has already filled, no reversal is allowed (maximum two
   entries per opening range). Reversals never create midpoint entries and use
