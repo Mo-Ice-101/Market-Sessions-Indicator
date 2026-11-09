@@ -130,6 +130,23 @@ class MarketTests(unittest.TestCase):
 
 
 class NewsTests(unittest.TestCase):
+    def test_fed_fallback_reports_narrower_coverage(self):
+        def retrieve(url):
+            if url == agent.FEEDS["Federal Reserve"]:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            if "api.gdeltproject.org" in url:
+                return b'{"articles":[]}'
+            return b"<rss><channel/></rss>"
+
+        with patch.object(agent, "GDELT_RETRY_AT", None), \
+                patch.object(agent, "request", side_effect=retrieve) as fetch:
+            _, health = agent.collect_news(NOW, 24)
+        fed = health["Federal Reserve"]
+        self.assertEqual(fed["status"], "ok")
+        self.assertIn("narrower coverage", fed["coverage_warning"])
+        self.assertEqual(fed["source_url"], agent.FED_MONETARY_FEED)
+        self.assertIn(((agent.FED_MONETARY_FEED,), {}), fetch.call_args_list)
+
     def test_gdelt_rate_limit_cooldown_preserves_other_feeds(self):
         rate_error = urllib.error.HTTPError(
             "https://api.gdeltproject.org", 429, "Too Many Requests",
@@ -150,6 +167,8 @@ class NewsTests(unittest.TestCase):
             self.assertEqual(agent.GDELT_RETRY_AT, NOW + timedelta(hours=1))
             _, second = agent.collect_news(NOW + timedelta(minutes=15), 24)
             self.assertIn("cooldown", second["GDELT"]["error"])
+            self.assertEqual(first["GDELT"]["retry_after_utc"],
+                             second["GDELT"]["retry_after_utc"])
             self.assertEqual(sum("api.gdeltproject.org" in url for url in calls), 1)
             self.assertEqual(len(calls), 9)
             self.assertEqual(first["Federal Reserve"]["status"], "ok")

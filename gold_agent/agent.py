@@ -27,6 +27,7 @@ FEEDS = {
     "BLS": "https://www.bls.gov/feed/bls_latest.rss",
     "BEA": "https://apps.bea.gov/rss/rss.xml",
 }
+FED_MONETARY_FEED = "https://www.federalreserve.gov/feeds/press_monetary.xml"
 TOPICS = {
     "monetary_policy": ("rate", "fed", "fomc", "monetary", "central bank"),
     "inflation": ("inflation", "cpi", "pce", "consumer price"),
@@ -177,6 +178,22 @@ def collect_news(now, hours):
         except (OSError, ValueError, ET.ParseError) as exc:
             LOG.error("News source %s unavailable: %s", source, exc)
             health[source] = {"status": "error", "error": str(exc)}
+            if source == "Federal Reserve":
+                try:
+                    found = read_feed(source, request(FED_MONETARY_FEED), now, hours)
+                    items.extend(found)
+                    warning = (
+                        f"All-releases feed failed: {exc}; using monetary-policy feed only, "
+                        "with narrower coverage."
+                    )
+                    LOG.warning("Federal Reserve: %s", warning)
+                    health[source] = {
+                        "status": "ok", "recent_items": len(found),
+                        "source_url": FED_MONETARY_FEED, "coverage_warning": warning,
+                    }
+                except (OSError, ValueError, ET.ParseError) as fallback_exc:
+                    LOG.error("Fed monetary-policy fallback unavailable: %s", fallback_exc)
+                    health[source]["error"] += f"; monetary-policy fallback: {fallback_exc}"
     query = '(gold OR inflation OR "central bank" OR dollar OR war OR sanctions)'
     params = urllib.parse.urlencode({
         "query": query, "mode": "artlist", "format": "json",
@@ -225,6 +242,8 @@ def collect_news(now, hours):
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         LOG.error("GDELT unavailable: %s", exc)
         health["GDELT"] = {"status": "error", "error": str(exc)}
+        if GDELT_RETRY_AT:
+            health["GDELT"]["retry_after_utc"] = GDELT_RETRY_AT.isoformat()
     unique = {item["id"]: item for item in items}
     return sorted(unique.values(), key=lambda item: item["published_utc"], reverse=True), health
 

@@ -114,6 +114,10 @@ Public inputs require no API keys:
 The agent does **not** scrape paywalls or redistribute full articles. Follow
 source terms, preserve attribution, and expect throttling or source outages.
 Failed feeds appear in `source_health` and the overall scan becomes `degraded`.
+If the Fed all-releases feed fails, the monitor tries its monetary-policy RSS
+feed and explicitly labels the narrower coverage in the report and dashboard.
+If both fail, the source remains unavailable; switching feeds cannot guarantee
+recovery from upstream or network problems.
 GDELT HTTP 429 responses start a 30-minute cooldown, doubling on repeated
 rate limits up to six hours, while respecting a longer `Retry-After` response.
 Official RSS feeds continue during cooldown; it does not guarantee GDELT access

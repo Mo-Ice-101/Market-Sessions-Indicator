@@ -142,6 +142,8 @@ def display_news(report):
         col = columns[index % len(columns)]
         if state.get("status") == "ok":
             col.success(f"{source} · {state.get('recent_items', 0)} recent")
+            if state.get("coverage_warning"):
+                col.warning(state["coverage_warning"])
         else:
             col.error(f"{source} · unavailable")
             if state.get("retry_after_utc"):
