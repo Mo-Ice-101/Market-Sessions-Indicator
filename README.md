@@ -176,6 +176,50 @@ then 2x M15 ATR(14) trailing, with a 1.000 price-unit initial stop buffer.
 Use `--stop-buffer-price 0.01` to reproduce the old 10-point gold baseline,
 or another nonnegative price-unit buffer to compare stops. Use `--verbose`
 for completed trade details.
+Use `--entry-minutes 5` (default) or `--entry-minutes 15` to compare M5 versus
+M15 breakout-close confirmations. The opening range remains the first M15
+candle; all sizing, session and exit settings stay unchanged. Confirmation
+must close strictly before the next scheduled opening, matching the EA.
+This simulator option does not change the live EA's M5 entries.
+
+#### M5 versus M15 entry comparison (2026-11-09)
+
+Replayed `XAUUSD_i_M1_202607220724_202610302254.csv` (2026-07-22 through
+2026-10-30), with a $1,000 starting balance, fixed 0.04 lots, Asian/London
+enabled, NY/midpoints/reversals disabled, EU broker DST, 1.000 price-unit stop
+buffer, +1R M1-close break-even, half exit at 2R and the existing ATR trail.
+Only the breakout confirmation timeframe differs:
+
+| Metric | M5 confirmation | M15 confirmation |
+| --- | ---: | ---: |
+| Completed trades | 145 | 145 |
+| Net P&L | +$1,686.37 | +$1,340.27 |
+| Final balance | $2,686.37 | $2,340.27 |
+| Winning trades | 32.4% | 29.7% |
+| Profit factor | 1.64 | 1.43 |
+| Maximum mark-to-market drawdown | 17.7% | 20.1% |
+| Asian net P&L | +$267.62 | -$153.80 |
+| London net P&L | +$1,418.75 | +$1,494.07 |
+
+M5 earned $346.10 more overall in this sample, with lower drawdown. M15 earned
+$75.32 more in London but $421.42 less in Asian. This is a historical
+comparison, not evidence that either setting will outperform on a live account.
+The history is the demo-symbol export, not the real-account `XAUUSD_r` feed.
+Existing preset selection used this period, so it is not an independent
+out-of-sample validation. Replay includes exported spread but excludes
+commissions, swaps, margin/stop-outs and actual broker execution restrictions;
+M1 OHLC cannot resolve intraminute stop/target order. Do not equate these
+balances to executable real-account returns.
+
+Reproduce each column with the same input export:
+
+```sh
+python tools/sim_ea.py path/to/XAUUSD_i_M1_202607220724_202610302254.csv --entry-minutes 5 --balance 1000 --lots 0.04
+python tools/sim_ea.py path/to/XAUUSD_i_M1_202607220724_202610302254.csv --entry-minutes 15 --balance 1000 --lots 0.04
+```
+
+Clear research environment overrides (such as `SKIP`, `NOMID`, `REVERSAL`,
+`NY_SWEEP`, `HALF_AT_BE`, `BE_R`, `FIXRR` or `SCALE_FRACTION`) before reproducing.
 The input is an MT5 tab-separated M1 export with spread in points.
 Instrument assumptions are 3 digits, 100 oz/lot and 0.01 minimum/step.
 

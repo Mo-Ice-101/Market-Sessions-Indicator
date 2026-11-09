@@ -11,6 +11,8 @@ parser.add_argument("--lots", type=float, default=0.04)
 parser.add_argument("--stop-buffer-price", type=float, default=1.0,
                     help="Price units beyond the opposite M15 range boundary (default 1.000)")
 parser.add_argument("--verbose", action="store_true", help="Print completed trades")
+parser.add_argument("--entry-minutes", type=int, choices=(5, 15), default=5,
+                    help="Breakout confirmation candle duration; opening range stays M15")
 args = parser.parse_args()
 if not math.isfinite(args.stop_buffer_price) or args.stop_buffer_price < 0:
     parser.error("--stop-buffer-price must be nonnegative and finite")
@@ -107,15 +109,18 @@ while day <= d1:
                                    profit=False, second_tried=False))
     day += D.timedelta(days=1)
 
-# breakout confirmation per range (first completed M5 close outside, before next session)
+# Breakout confirmation changes independently of the opening range and exit rules.
+entry_bars = m5 if args.entry_minutes == 5 else m15
 for r in ranges:
     t = r["end"]
-    while t + D.timedelta(minutes=5) <= r["next"]:
-        if t in m5:
-            c = m5[t][3]
+    while t + D.timedelta(minutes=args.entry_minutes) < r["next"]:
+        if t in entry_bars:
+            c = entry_bars[t][3]
             if c > r["hi"] or c < r["lo"]:
-                r["dir"] = 1 if c > r["hi"] else -1; r["conf"] = t + D.timedelta(minutes=5); break
-        t += D.timedelta(minutes=5)
+                r["dir"] = 1 if c > r["hi"] else -1
+                r["conf"] = t + D.timedelta(minutes=args.entry_minutes)
+                break
+        t += D.timedelta(minutes=args.entry_minutes)
 
 if os.environ.get("NY_SWEEP"):
     for r in ranges:
@@ -279,6 +284,7 @@ gp, gl = sum(x["pnl"] for x in wins), -sum(x["pnl"] for x in losses)
 print("Approximate M1 replay: no commissions, swaps, margin/stop-outs or broker execution restrictions.")
 print(f"Broker DST={DST} fixed lots={args.lots}  ranges={len(ranges)} signals={sum(1 for r in ranges if r['conf'])}")
 print(f"Stop buffer={BUFFER:.3f} price units")
+print(f"Entry confirmation=M{args.entry_minutes}; opening range=M15")
 print(f"Trades {len(done)}  skipped(volume) {sum(1 for x in trades if x.get('skipped'))}")
 print(f"Net {balance - START:+.2f}  final {balance:.2f}  winrate {len(wins)/max(1,len(done))*100:.1f}%  "
       f"PF {gp/gl if gl else float('inf'):.2f}  maxDD {mdd*100:.1f}%")
