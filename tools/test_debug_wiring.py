@@ -16,7 +16,7 @@ class DebugWiringTests(unittest.TestCase):
 
     def test_debug_covers_signals_and_broker_conditions(self):
         source = (ROOT / "Market_Sessions_EA.mq5").read_text()
-        for text in ("opening M15 complete", "no breakout: M5 bar",
+        for text in ("opening M15 complete", "no breakout: %s bar",
                      "historical breakout", "session open=%s next open=%s",
                      "broker minimum=", "requested market lots=",
                      "margin: market=", "response: sent=", "Submitting once"):

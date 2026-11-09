@@ -69,8 +69,18 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   standard UTC offset and DST rule** in both live trading and backtesting;
   it does not learn offsets from the live clock. For matching visuals, disable
   automatic detection on the indicator and use the same timezone inputs.
+- Each session has a **Break Entry TF** dropdown: `InpAsianBreakEntryTF`,
+  `InpLondonBreakEntryTF` and `InpNYBreakEntryTF`. Choose **M5** or **M15**;
+  all default to **M5**. To use the compared mixed configuration, choose Asian
+  M5 and London M15 in EA Inputs. NY remains disabled unless `InpTradeNY` is
+  explicitly enabled; selecting a NY timeframe never enables NY trading.
+  The opening range stays M15, and break-even, ATR, midpoint and optional
+  reversal management are unchanged. EA-attached box colors/arrows use the
+  same per-session selections. Recopy the shared header and recompile **both**
+  EA and indicator after updating. Existing presets without these fields use
+  the M5 defaults on a fresh attachment; verify selections after loading inputs.
 - After the first complete M15 candle at/after a session opening, the first
-  subsequent M5 close strictly above/below that candle's range confirms a
+  subsequent selected M5/M15 close strictly above/below that candle's range confirms a
   buy/sell. Wicks and boundary equality do not signal. RSI is not a filter.
 - Each opening range can create one **high-risk market entry** and one
   **medium-risk entry when price retraces to its 50% midpoint**, in the same
@@ -114,8 +124,9 @@ in MetaEditor with F7. Git pull alone does not update the terminal folders.
   on timer/tick updates; failed cancellations are logged and retried.
   Session boundaries never close filled trades or reset their trailing stops.
 - `InpDaysToMonitor` defaults to the indicator's five-calendar-day horizon.
-  Older sessions expire. Only confirmations in the immediately preceding M5
-  candle are eligible: starting/restarting the EA never enters historical
+  Older sessions expire.   Only fresh confirmations from the selected timeframe
+  are eligible, during the first M5 interval following that close:
+  starting/restarting the EA never enters historical
   signals. Missing history is retried within the current M5 candle; signals
   missed before history arrives are not traded late. The first M5 candle
   closing after startup can signal.
@@ -180,7 +191,15 @@ Use `--entry-minutes 5` (default) or `--entry-minutes 15` to compare M5 versus
 M15 breakout-close confirmations. The opening range remains the first M15
 candle; all sizing, session and exit settings stay unchanged. Confirmation
 must close strictly before the next scheduled opening, matching the EA.
-This simulator option does not change the live EA's M5 entries.
+Simulator options do not modify the live EA's input selections.
+Per-session overrides are also supported, for example:
+
+```sh
+python tools/sim_ea.py path/to/new_M1_export.csv --asian-entry-minutes 5 --london-entry-minutes 15
+```
+
+These mirror the EA's independent dropdowns; unspecified sessions use
+`--entry-minutes` (M5 by default).
 
 #### M5 versus M15 entry comparison (2026-11-09)
 

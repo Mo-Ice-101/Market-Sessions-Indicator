@@ -113,6 +113,26 @@ void OnStart()
                           110, 90, confirmation) == -1 &&
          confirmation == D'2026.11.03 00:00', "Overnight session confirmation");
 
+   MqlRates slow[2];
+   ZeroMemory(slow);
+   slow[0].time = D'2026.11.02 08:15';
+   slow[0].close = 111;
+   slow[1].time = D'2026.11.02 08:30';
+   slow[1].close = 89;
+   Check(FindOpeningBreak(slow, D'2026.11.02 08:15', D'2026.11.02 10:00',
+                          D'2026.11.02 08:29', 110, 90, confirmation, PERIOD_M15) == 0,
+         "M15 breakout waits for full close");
+   Check(FindOpeningBreak(slow, D'2026.11.02 08:15', D'2026.11.02 10:00',
+                          D'2026.11.02 08:30', 110, 90, confirmation, PERIOD_M15) == 1 &&
+         confirmation == D'2026.11.02 08:15', "M15 confirmation closes at 08:30");
+   Check(FindOpeningBreak(slow, D'2026.11.02 08:15', D'2026.11.02 08:30',
+                          D'2026.11.02 09:00', 110, 90, confirmation, PERIOD_M15) == 0,
+         "M15 close at next opening excluded");
+   Check(ValidBreakEntryTimeframe(BREAK_ENTRY_M5) &&
+         ValidBreakEntryTimeframe(BREAK_ENTRY_M15) &&
+         !ValidBreakEntryTimeframe((BreakEntryTimeframe)PERIOD_M1),
+         "Only M5 and M15 break entry selections accepted");
+
    Check(MathAbs(FloorVolume(0.119, 0.02) - 0.10) < 1e-8,
          "Risk volume rounds down to two steps");
    Check(MathAbs(FloorVolume(0.10, 0.02) - 0.10) < 1e-8,

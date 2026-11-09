@@ -10,6 +10,17 @@ enum BrokerDSTRule
    BROKER_DST_NZ
 };
 
+enum BreakEntryTimeframe
+{
+   BREAK_ENTRY_M5 = PERIOD_M5,   // M5
+   BREAK_ENTRY_M15 = PERIOD_M15  // M15
+};
+
+bool ValidBreakEntryTimeframe(const BreakEntryTimeframe timeframe)
+{
+   return timeframe == BREAK_ENTRY_M5 || timeframe == BREAK_ENTRY_M15;
+}
+
 datetime TransitionSunday(const int year, const int month,
                           const int occurrence, const int hour)
 {
@@ -112,12 +123,13 @@ bool LoadOpeningRange(const string symbol, const datetime session_open,
 // The input array is chronological, as returned by CopyRates without AS_SERIES.
 int FindOpeningBreak(const MqlRates &rates[], const datetime range_close,
                      const datetime next_session, const datetime now,
-                     const double high, const double low, datetime &confirmation)
+                     const double high, const double low, datetime &confirmation,
+                     const ENUM_TIMEFRAMES timeframe = PERIOD_M5)
 {
    confirmation = 0;
    for(int i = 0; i < ArraySize(rates); i++)
    {
-      datetime closed = rates[i].time + PeriodSeconds(PERIOD_M5);
+      datetime closed = rates[i].time + PeriodSeconds(timeframe);
       if(rates[i].time < range_close || closed > now || closed >= next_session)
          continue;
       int direction = rates[i].close > high ? 1 : (rates[i].close < low ? -1 : 0);

@@ -4,8 +4,8 @@
 //| Asian/London use GMT+2 winter times; NY uses UTC winter times.    |
 //| London, New York and broker DST are calculated for each date.     |
 //+------------------------------------------------------------------+
-#property version   "1.02"
-#property description "Opening M15 ranges with M5 breakouts and levels to the next session."
+#property version   "1.03"
+#property description "Opening M15 ranges with per-session M5/M15 breakouts and levels."
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -46,6 +46,20 @@ input int  InpBoxWidth       = 1;    // Border width: 1-5 pixels
 input int  InpDaysToShow     = 5;    // Calendar days including today: 1-30
 input string InpInstanceName = ""; // Optional unique name for EA-owned chart attachment
 
+input group "Break Entry Timeframes"
+input BreakEntryTimeframe InpAsianBreakEntryTF = BREAK_ENTRY_M5; // Asian Break Entry TF
+input BreakEntryTimeframe InpLondonBreakEntryTF = BREAK_ENTRY_M5; // London Break Entry TF
+input BreakEntryTimeframe InpNYBreakEntryTF = BREAK_ENTRY_M5; // NY Break Entry TF
+
+ENUM_TIMEFRAMES SessionBreakTimeframe(const int session)
+{
+   if(session == 0)
+      return (ENUM_TIMEFRAMES)InpAsianBreakEntryTF;
+   if(session == 1)
+      return (ENUM_TIMEFRAMES)InpLondonBreakEntryTF;
+   return (ENUM_TIMEFRAMES)InpNYBreakEntryTF;
+}
+
 struct SessionInfo
 {
    string name;
@@ -65,7 +79,7 @@ struct SessionBox
    color    final_color;
    bool     evaluated;
    bool     range_loaded;
-   datetime confirm_bar_time; // Open time of the M5 confirmation candle
+   datetime confirm_bar_time; // Open time of the selected confirmation candle
 };
 
 SessionInfo g_sessions[3];
@@ -366,6 +380,13 @@ int OnInit()
             "and a supported DST rule is required.");
       return INIT_PARAMETERS_INCORRECT;
    }
+   if(!ValidBreakEntryTimeframe(InpAsianBreakEntryTF) ||
+      !ValidBreakEntryTimeframe(InpLondonBreakEntryTF) ||
+      !ValidBreakEntryTimeframe(InpNYBreakEntryTF))
+   {
+      Print("Break Entry TF must be M5 or M15 for each session.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
    if(InpDaysToShow < 1 || InpDaysToShow > 30 || InpBoxWidth < 1 || InpBoxWidth > 5)
    {
       Print("Days to show must be 1-30 and border width must be 1-5.");
@@ -489,24 +510,25 @@ void OnChartEvent(const int id, const long &lparam,
 }
 
 //+------------------------------------------------------------------+
-//| Freeze the opening M15 range, then use completed M5 body closes.  |
+//| Freeze the opening M15 range, then use selected candle closes.    |
 //+------------------------------------------------------------------+
 void ConfirmBreak(SessionBox &box, const datetime now)
 {
    if(box.evaluated || !box.range_loaded || now < box.range_close)
       return;
    MqlRates rates[];
-   int count = CopyRates(_Symbol, PERIOD_M5, box.range_close, now, rates);
+   ENUM_TIMEFRAMES timeframe = SessionBreakTimeframe(box.session);
+   int count = CopyRates(_Symbol, timeframe, box.range_close, now, rates);
    if(count <= 0)
       return;
    datetime confirmation;
    int direction = FindOpeningBreak(rates, box.range_close, box.next_session, now,
-                                    box.high, box.low, confirmation);
+                                    box.high, box.low, confirmation, timeframe);
    if(direction != 0)
    {
       box.final_color = direction > 0 ? clrGreen : clrRed;
       box.confirm_bar_time = confirmation;
-      box.close_time = confirmation + PeriodSeconds(PERIOD_M5);
+      box.close_time = confirmation + PeriodSeconds(timeframe);
       box.evaluated = true;
    }
 }
@@ -626,7 +648,7 @@ void DrawConfirmationArrow(const SessionBox &box)
    if(ObjectFind(g_chart, name) >= 0)
       return;
    MqlRates bar[];
-   if(CopyRates(_Symbol, PERIOD_M5, box.confirm_bar_time, 1, bar) <= 0 ||
+   if(CopyRates(_Symbol, SessionBreakTimeframe(box.session), box.confirm_bar_time, 1, bar) <= 0 ||
       bar[0].time != box.confirm_bar_time)
       return;
    bool buy = (box.final_color == clrGreen);

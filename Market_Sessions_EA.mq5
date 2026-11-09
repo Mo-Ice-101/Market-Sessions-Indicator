@@ -1,6 +1,6 @@
 #property strict
-#property version "1.08"
-#property description "Opening M15 / M5 breakout and midpoint entries, 50% at 2R, ATR trail."
+#property version "1.09"
+#property description "Opening M15 / selectable M5-M15 breakout entries, 50% at 2R, ATR trail."
 #property tester_indicator "Market_Sessions_Boxes.ex5"
 
 #include <Trade/Trade.mqh>
@@ -41,6 +41,7 @@ input int           InpBrokerDSTMinutes = 60;
 input group "Asian Session (GMT+2 winter reference)"
 input bool InpTradeAsian = true;
 input bool InpAsianMidpoint = false; // Second (midpoint) entry for this session
+input BreakEntryTimeframe InpAsianBreakEntryTF = BREAK_ENTRY_M5; // Asian Break Entry TF
 input int  InpAsianOpenHour = 1;
 input int  InpAsianOpenMin = 0;
 input int  InpAsianCloseHour = 2; // Session setting only; does not end trade management
@@ -49,6 +50,7 @@ input int  InpAsianCloseMin = 0;
 input group "London Session (GMT+2 winter reference)"
 input bool InpTradeLondon = true;
 input bool InpLondonMidpoint = false; // Second (midpoint) entry for this session
+input BreakEntryTimeframe InpLondonBreakEntryTF = BREAK_ENTRY_M5; // London Break Entry TF
 input int  InpLondonOpenHour = 11;
 input int  InpLondonOpenMin = 0;
 input int  InpLondonCloseHour = 15; // Session setting only; does not end trade management
@@ -57,6 +59,7 @@ input int  InpLondonCloseMin = 0;
 input group "NY Session (UTC winter reference)"
 input bool InpTradeNY = false; // Disabled by default (weakest session in backtest)
 input bool InpNYMidpoint = false; // Second (midpoint) entry for this session
+input BreakEntryTimeframe InpNYBreakEntryTF = BREAK_ENTRY_M5; // NY Break Entry TF (does not enable NY)
 input int  InpNYOpenHour = 13;
 input int  InpNYOpenMin = 30;
 input int  InpNYCloseHour = 21; // Session setting only; does not end trade management
@@ -71,6 +74,7 @@ struct EASession
    int open_minutes;
    bool enabled;
    bool midpoint;
+   ENUM_TIMEFRAMES break_timeframe;
 };
 
 struct EASessionRange
@@ -151,7 +155,8 @@ bool AttachSessionBoxes()
       InpAsianOpenHour, InpAsianOpenMin, InpAsianCloseHour, InpAsianCloseMin, InpBoxTransparency,
       InpLondonOpenHour, InpLondonOpenMin, InpLondonCloseHour, InpLondonCloseMin, InpBoxTransparency,
       InpNYOpenHour, InpNYOpenMin, InpNYCloseHour, InpNYCloseMin, InpBoxTransparency,
-      true, true, 1, InpDaysToMonitor, g_visual_name);
+      true, true, 1, InpDaysToMonitor, g_visual_name,
+      InpAsianBreakEntryTF, InpLondonBreakEntryTF, InpNYBreakEntryTF);
    if(g_visual_indicator == INVALID_HANDLE)
    {
       Print("Cannot load session boxes. Compile Market_Sessions_Boxes.mq5 with ",
@@ -184,9 +189,12 @@ int OnInit()
       InpBrokerDSTRule < BROKER_DST_NONE || InpBrokerDSTRule > BROKER_DST_NZ ||
       InpBrokerDSTMinutes < 1 || InpBrokerDSTMinutes > 120 ||
       InpDaysToMonitor < 1 || InpDaysToMonitor > 30 ||
+      !ValidBreakEntryTimeframe(InpAsianBreakEntryTF) ||
+      !ValidBreakEntryTimeframe(InpLondonBreakEntryTF) ||
+      !ValidBreakEntryTimeframe(InpNYBreakEntryTF) ||
       InpBoxTransparency < 0 || InpBoxTransparency > 100)
    {
-      Print("Invalid sizing, stop buffer, break-even, ATR, magic, spread, timezone or monitoring inputs.");
+      Print("Invalid sizing, stop buffer, break-even, ATR, magic, spread, timezone, break timeframe or monitoring inputs.");
       return INIT_PARAMETERS_INCORRECT;
    }
    if(AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
@@ -201,6 +209,9 @@ int OnInit()
       !ConfigureEASession(2, "NY", InpTradeNY, InpNYMidpoint, InpNYOpenHour, InpNYOpenMin,
                          InpNYCloseHour, InpNYCloseMin))
       return INIT_PARAMETERS_INCORRECT;
+   g_sessions[0].break_timeframe = (ENUM_TIMEFRAMES)InpAsianBreakEntryTF;
+   g_sessions[1].break_timeframe = (ENUM_TIMEFRAMES)InpLondonBreakEntryTF;
+   g_sessions[2].break_timeframe = (ENUM_TIMEFRAMES)InpNYBreakEntryTF;
    g_atr = iATR(_Symbol, PERIOD_M15, InpATRPeriod);
    if(g_atr == INVALID_HANDLE)
    {
@@ -1167,7 +1178,16 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
          g_ranges[i].evaluated = true;
          continue;
       }
-      if(g_ranges[i].end > current_bar - PeriodSeconds(PERIOD_M5))
+      ENUM_TIMEFRAMES timeframe = g_sessions[g_ranges[i].session].break_timeframe;
+      int seconds = PeriodSeconds(timeframe);
+      datetime signal_bar = iTime(_Symbol, timeframe, 0);
+      if(signal_bar <= 0)
+      {
+         Warn(EnumToString(timeframe) + " confirmation history is unavailable; waiting.");
+         ready = false;
+         continue;
+      }
+      if(g_ranges[i].end > signal_bar - seconds)
          continue;
       if(!g_ranges[i].loaded)
       {
@@ -1179,43 +1199,48 @@ void ProcessSignals(const datetime current_bar, const MqlTick &tick)
             continue;
          }
          g_ranges[i].loaded = true;
-         DebugSignal(StringFormat("%s opening M15 complete: session open=%s range end=%s high=%.5f low=%.5f; awaiting M5 close outside range until next open %s.",
+         DebugSignal(StringFormat("%s opening M15 complete: session open=%s range end=%s high=%.5f low=%.5f; awaiting %s close outside range until next open %s.",
             g_sessions[g_ranges[i].session].name,
             TimeToString(g_ranges[i].start, TIME_DATE | TIME_MINUTES),
             TimeToString(g_ranges[i].end, TIME_DATE | TIME_MINUTES),
             g_ranges[i].high, g_ranges[i].low,
+            EnumToString(timeframe),
             TimeToString(g_ranges[i].next_session, TIME_DATE | TIME_MINUTES)));
       }
       MqlRates rates[];
-      if(CopyRates(_Symbol, PERIOD_M5, g_ranges[i].end, current_bar - 1, rates) <= 0 ||
-         !SeriesInfoInteger(_Symbol, PERIOD_M5, SERIES_SYNCHRONIZED) ||
-         SeriesInfoInteger(_Symbol, PERIOD_M5, SERIES_FIRSTDATE) > g_ranges[i].end)
+      if(CopyRates(_Symbol, timeframe, g_ranges[i].end, signal_bar - 1, rates) <= 0 ||
+         !SeriesInfoInteger(_Symbol, timeframe, SERIES_SYNCHRONIZED) ||
+         SeriesInfoInteger(_Symbol, timeframe, SERIES_FIRSTDATE) > g_ranges[i].end)
       {
-         Warn("M5 confirmation history is unavailable; waiting.");
+         Warn(EnumToString(timeframe) + " confirmation history is unavailable; waiting.");
          ready = false;
          continue;
       }
       datetime confirmation;
-      int direction = FindOpeningBreak(rates, g_ranges[i].end, g_ranges[i].next_session, current_bar,
-                                       g_ranges[i].high, g_ranges[i].low, confirmation);
+      int direction = FindOpeningBreak(rates, g_ranges[i].end, g_ranges[i].next_session, signal_bar,
+                                       g_ranges[i].high, g_ranges[i].low, confirmation, timeframe);
       if(direction == 0)
       {
          if(g_ranges[i].start >= g_start_bar && ArraySize(rates) > 0)
-            DebugSignal(StringFormat("%s no breakout: M5 bar=%s close=%.5f, range low=%.5f high=%.5f (close must be strictly outside).",
+            DebugSignal(StringFormat("%s no breakout: %s bar=%s close=%.5f, range low=%.5f high=%.5f (close must be strictly outside).",
                g_sessions[g_ranges[i].session].name,
+               EnumToString(timeframe),
                TimeToString(rates[ArraySize(rates) - 1].time, TIME_DATE | TIME_MINUTES),
                rates[ArraySize(rates) - 1].close, g_ranges[i].low, g_ranges[i].high));
          continue;
       }
       g_ranges[i].evaluated = true;
       // Historical signals are consumed, never entered late or replayed after restart.
-      if(confirmation == current_bar - PeriodSeconds(PERIOD_M5))
+      if(confirmation == signal_bar - seconds &&
+         confirmation + seconds > g_start_bar &&
+         tick.time < signal_bar + PeriodSeconds(PERIOD_M5))
          EnterTrades(g_ranges[i], direction, tick);
       else
-         DebugSignal(StringFormat("%s historical breakout at %s was not traded: EA only enters the immediately preceding M5 confirmation; current M5=%s.",
+         DebugSignal(StringFormat("%s historical breakout at %s was not traded: EA only enters a fresh %s confirmation; current bar=%s.",
             g_sessions[g_ranges[i].session].name,
             TimeToString(confirmation, TIME_DATE | TIME_MINUTES),
-            TimeToString(current_bar, TIME_DATE | TIME_MINUTES)));
+            EnumToString(timeframe),
+            TimeToString(signal_bar, TIME_DATE | TIME_MINUTES)));
    }
    if(ready)
       g_last_signal_bar = current_bar;

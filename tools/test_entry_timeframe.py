@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class EntryTimeframeTests(unittest.TestCase):
-    def replay(self, minutes):
+    def replay(self, minutes, extra=()):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "bars.csv"
             with path.open("w", newline="") as output:
@@ -32,7 +32,7 @@ class EntryTimeframeTests(unittest.TestCase):
             }}
             return subprocess.run(
                 [sys.executable, str(ROOT / "tools/sim_ea.py"), str(path),
-                 "--entry-minutes", str(minutes), "--verbose"],
+                 "--entry-minutes", str(minutes), "--verbose", *extra],
                 env=env, capture_output=True, text=True, check=True,
             ).stdout
 
@@ -46,6 +46,31 @@ class EntryTimeframeTests(unittest.TestCase):
         self.assertIn("Entry confirmation=M15; opening range=M15", output)
         self.assertIn("2026-01-13 01:30:00 Asian", output)
         self.assertNotIn("2026-01-13 01:20:00 Asian", output)
+
+    def test_session_override_does_not_change_other_sessions(self):
+        output = self.replay(5, ("--asian-entry-minutes", "15"))
+        self.assertIn("2026-01-13 01:30:00 Asian", output)
+        self.assertIn("'Asian': 15, 'London': 5, 'NY': 5", output)
+
+    def test_london_override_preserves_asian_m5(self):
+        output = self.replay(5, ("--london-entry-minutes", "15"))
+        self.assertIn("2026-01-13 01:20:00 Asian", output)
+        self.assertIn("'Asian': 5, 'London': 15, 'NY': 5", output)
+
+    def test_ea_and_visuals_share_session_timeframes(self):
+        ea = (ROOT / "Market_Sessions_EA.mq5").read_text()
+        indicator = (ROOT / "Market_Sessions_Boxes.mq5").read_text()
+        for session in ("Asian", "London", "NY"):
+            self.assertIn(
+                f"input BreakEntryTimeframe Inp{session}BreakEntryTF = BREAK_ENTRY_M5;", ea
+            )
+            self.assertIn(
+                f"input BreakEntryTimeframe Inp{session}BreakEntryTF = BREAK_ENTRY_M5;", indicator
+            )
+        self.assertIn("input bool InpTradeNY = false;", ea)
+        self.assertIn("InpAsianBreakEntryTF, InpLondonBreakEntryTF, InpNYBreakEntryTF);", ea)
+        self.assertIn("confirmation + seconds > g_start_bar", ea)
+        self.assertIn("tick.time < signal_bar + PeriodSeconds(PERIOD_M5)", ea)
 
 
 if __name__ == "__main__":
