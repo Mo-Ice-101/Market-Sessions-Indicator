@@ -252,6 +252,9 @@ class AITests(unittest.TestCase):
 
     def answer(self, **kwargs):
         result = {"assessment": "mixed", "confidence": "low", "summary": "Conflicting signals",
+                  "reasons": ["Gold and USD have conflicting signals."],
+                  "opposing_evidence": ["News coverage is limited."],
+                  "invalidation": "Fresh aligned market moves could change the view.",
                   "caveats": [], "news": [{"id": "known", "mechanism": "Possible safe-haven demand",
                                           "potential_impact": "unclear"}]}
         result.update(kwargs)
@@ -262,7 +265,17 @@ class AITests(unittest.TestCase):
             result = agent.local_analysis("local-model", self.evidence())
         self.assertEqual(result["status"], "ok")
         self.assertEqual(req.call_args.args[0], "http://127.0.0.1:11434/api/generate")
-        self.assertEqual(req.call_args.args[1]["options"]["num_predict"], 1200)
+        self.assertEqual(req.call_args.args[1]["options"]["num_predict"], 1800)
+        self.assertEqual(req.call_args.args[1]["format"]["type"], "object")
+        self.assertEqual(
+            req.call_args.args[1]["format"]["properties"]["news"]["items"]["properties"]["id"]["enum"],
+            ["known"],
+        )
+
+    def test_forecast_requires_reasons_and_invalidation(self):
+        for replacement in ({"reasons": []}, {"invalidation": ""}, {"opposing_evidence": "invalid"}):
+            with patch.object(agent, "request", return_value=self.answer(**replacement)):
+                self.assertEqual(agent.local_analysis("model", self.evidence())["status"], "error")
 
     def test_local_inference_gets_longer_timeout(self):
         from unittest.mock import MagicMock

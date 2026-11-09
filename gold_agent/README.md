@@ -137,6 +137,19 @@ Default output is `gold_agent/data/` (git-ignored):
 The browser dashboard at `http://127.0.0.1:8501` shows market context, linked
 headlines, data warnings and forecast-test results. The console also reports the
 latest file path; email or Telegram delivery is not included.
+The main forecast card explicitly shows UP bias, DOWN bias, no clear direction,
+or insufficient evidence, followed by the model's reasons, competing evidence,
+what would change its view, and any cited source links. These explanations are
+model interpretations, not verified market facts. Missing news retrieval does
+not establish that no major news exists. Observed market moves are separately
+labeled and are never presented as predictions.
+
+Ollama receives a structured JSON schema with the permitted headline IDs.
+Responses still undergo local validation; schema compliance does not establish
+factual correctness or predictive skill. A valid response must include reasons
+and an invalidation condition. Existing reports remain readable; a fresh scan is
+needed for the expanded explanation. Evidence and AI-completion timestamps are
+shown separately because local inference takes time.
 Reports and logs accumulate: archive or remove old files as appropriate. Run only
 one monitor per output directory. Changing `--output` changes the deduplication
 state. News freshness defaults to 24 hours (`--lookback-hours`, range 1-72).
