@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+gold_agent/.venv/
+gold_agent/data/
