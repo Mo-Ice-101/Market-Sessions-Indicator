@@ -14,12 +14,18 @@ parser.add_argument("--verbose", action="store_true", help="Print completed trad
 parser.add_argument("--half-at-breakeven", action="store_true",
                     help="Research only: close 50%% at the +1R M1-close break-even trigger; "
                          "start ATR trailing only after +2R is reached")
+parser.add_argument("--scale-out-r", type=int, choices=(2, 3), default=2,
+                    help="Half-close at this R; ATR trailing still starts at +2R")
 parser.add_argument("--entry-minutes", type=int, choices=(5, 15), default=5,
                     help="Breakout confirmation candle duration; opening range stays M15")
 for session in ("asian", "london", "ny"):
     parser.add_argument(f"--{session}-entry-minutes", type=int, choices=(5, 15),
                         help="Override breakout timeframe for this session only")
 args = parser.parse_args()
+if args.scale_out_r != 2 and (args.half_at_breakeven or any(
+    os.environ.get(key) for key in ("HALF_AT_BE", "FIXRR", "SCALE_FRACTION")
+)):
+    parser.error("--scale-out-r 3 cannot be combined with other scale-out overrides")
 if not math.isfinite(args.stop_buffer_price) or args.stop_buffer_price < 0:
     parser.error("--stop-buffer-price must be nonnegative and finite")
 if not math.isfinite(args.balance) or args.balance <= 0:
@@ -260,16 +266,20 @@ for t, o, h, l, c, sp in bars:
                     p["scaled"] = True
                     close(p, executable, round(p["vol"] / 2, 2), t, "BE-half")
         reached_2r = h >= tgt if p["buy"] else l + sp <= tgt
-        if args.half_at_breakeven and reached_2r:
+        independent_trail = args.half_at_breakeven or args.scale_out_r == 3
+        if independent_trail and reached_2r:
             p["trail_armed"] = True
-        if not (os.environ.get("HALF_AT_BE") or args.half_at_breakeven) and not p["scaled"] and reached_2r:
+        scale_target = p["entry"] + (1 if p["buy"] else -1) * args.scale_out_r * p["risk"]
+        reached_scale = h >= scale_target if p["buy"] else l + sp <= scale_target
+        if not (os.environ.get("HALF_AT_BE") or args.half_at_breakeven) and not p["scaled"] and reached_scale:
             p["scaled"] = True
             partial = round(p["vol"] * float(os.environ.get("SCALE_FRACTION", "0.5")), 2)
             if not os.environ.get("FIXRR"):
                 assert partial >= MINLOT and round(p["vol"] - partial, 2) >= MINLOT
-            close(p, tgt, p["rem"] if os.environ.get("FIXRR") else partial, t, "2R")
-        if p["scaled"] and p in positions and (
-            not args.half_at_breakeven or p.get("trail_armed", False)
+            close(p, scale_target, p["rem"] if os.environ.get("FIXRR") else partial,
+                  t, f"{args.scale_out_r}R")
+        if p in positions and (
+            p.get("trail_armed", False) if independent_trail else p["scaled"]
         ):
             mkt = c if p["buy"] else c + sp
             be = p["entry"]
@@ -304,7 +314,7 @@ print(f"Stop buffer={BUFFER:.3f} price units")
 print("Exit mode:", "50% at +1R M1 close / BE; ATR trail armed at +2R"
       if args.half_at_breakeven else
       ("legacy HALF_AT_BE override" if os.environ.get("HALF_AT_BE") else
-       "BE at +1R M1 close; 50% and ATR trail at +2R"))
+       f"BE at +1R M1 close; 50% at +{args.scale_out_r}R; ATR trail at +2R"))
 print(f"Entry confirmation=M{args.entry_minutes}; opening range=M15")
 print("Session entry overrides:", {
     name: getattr(args, name.lower() + "_entry_minutes") or args.entry_minutes

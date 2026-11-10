@@ -260,6 +260,18 @@ Clear research environment overrides (such as `SKIP`, `NOMID`, `REVERSAL`,
 
 #### Half-close at break-even, trail at 2R (2026-11-10)
 
+For the EA's 3R half-close variant, use `--scale-out-r 3` instead of
+`--half-at-breakeven`. Break-even remains at the +1R M1 close; ATR trailing
+starts on the full position at +2R, before the +3R half-close. Trailing can
+therefore close a position before it reaches its half-close target.
+The same Asian M5 / London M15 / NY-off replay produced 145 trades,
+net +$1,862.03, final $2,862.03, PF 1.71, win rate 31.0%, maximum equity
+drawdown 16.7%, and 45 winners / 68 losers / 32 flat trades. Asian net was
++$251.49 and London net +$1,610.53. Monthly net: July +$255.96 (partial),
+August +$534.11, September +$571.65, October +$500.30.
+This is $100.34 more than the default 2R half-close in the already-used
+sample, not independent evidence of better live performance.
+
 Research-only `--half-at-breakeven` closes half the original volume at the
 executable completed M1 close that first reaches +1R and moves the remaining
 stop to entry. ATR trailing stays off until executable price first reaches

@@ -24,7 +24,7 @@ class HalfAtBreakevenTests(unittest.TestCase):
             closes.append((price, volume, reason))
 
         scope = dict(
-            args=SimpleNamespace(half_at_breakeven=research), os=os,
+            args=SimpleNamespace(half_at_breakeven=research, scale_out_r=2), os=os,
             atr={dt.datetime(2026, 1, 1): 1.}, t=dt.datetime(2026, 1, 1),
             floor=lambda stamp, minutes: stamp, positions=[p], close=close,
             TRAIL=2., MINLOT=.01,
@@ -74,6 +74,28 @@ class HalfAtBreakevenTests(unittest.TestCase):
         self.manage(scope, 120, 120, 119)
         self.assertEqual(closes, [(120, .02, "2R")])
         self.assertEqual(p["sl"], 118)
+
+    def test_three_r_trails_full_position_at_two_r_then_closes_half_once(self):
+        for buy in (True, False):
+            with self.subTest(buy=buy):
+                p, closes, scope = self.setup_position(buy=buy, research=False)
+                scope["args"].scale_out_r = 3
+                sign = 1 if buy else -1
+                price = 100 + sign * 10
+                self.manage(scope, price, price, price)
+                self.assertEqual(p["sl"], 100)
+                self.assertEqual(closes, [])
+                price = 100 + sign * 20
+                self.manage(scope, price, price, price)
+                self.assertEqual(p["sl"], price - sign * 2)
+                self.assertEqual(p["rem"], .04)
+                self.assertEqual(closes, [])
+                price = 100 + sign * 30
+                self.manage(scope, price, price, price)
+                self.assertEqual(closes, [(price, .02, "3R")])
+                self.assertEqual(p["rem"], .02)
+                self.manage(scope, price, price, price)
+                self.assertEqual(len(closes), 1)
 
 
 if __name__ == "__main__":
