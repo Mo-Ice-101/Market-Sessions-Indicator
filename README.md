@@ -35,7 +35,7 @@ and canvas. Set `InpShowSessionBoxes=false` only to deliberately hide its visual
 
 Save your EA inputs before upgrading and verify them afterward. Reattaching,
 recompiling or changing inputs does not replay earlier breakout entries.
-Confirm **EA 1.10**, the selected session timeframes in the chart's status label,
+Confirm **EA 1.11**, the selected session timeframes and management R in the chart's status labels,
 and the initialization message in Experts. Box colors/arrows show confirmed
 breakouts, including historical or entry-disabled sessions; they do not prove
 that a trade was filled. A box appears only after the opening M15 closes and
@@ -48,7 +48,7 @@ Run in Strategy Tester and on a demo account before enabling live trading.
 and midpoint entries and cancel this EA's unfilled midpoint orders on the
 next tick/timer event. Cancellation requires connectivity and algorithmic
 trading permission; rejected cancellations are logged and retried.
-Existing filled positions continue their independent 2R exits, break-even
+Existing filled positions continue their independent selected-R half exits, break-even
 and ATR trailing for safety, even while entries are disabled.
 The standalone `Market_Sessions_Boxes.mq5` source is retained for legacy
 indicator-only use with no EA management. It is not part of the EA installation
@@ -109,19 +109,19 @@ EA EX5 is needed at runtime. Git pull alone does not update the terminal folders
   This option intentionally overrides the profit lock for the reversal only.
   If a midpoint entry has already filled, no reversal is allowed (maximum two
   entries per opening range). Reversals never create midpoint entries and use
-  the same sizing, range stop, +1R break-even, 2R half-close and ATR trailing.
+  the same sizing, range stop, +1R break-even, selected-R half-close and ATR trailing.
   Filled reversal entries are recovered from broker history after restart;
   historical signals are not replayed. A rejected reversal attempt is consumed
   for the current run. Disabling the option blocks new reversals but leaves
   existing positions managed.
 - A **hedging account is required**. Earlier sessions' EA positions do not
-  block new opening-range pairs: every entry keeps its own original R, 2R exit
+  block new opening-range pairs: every entry keeps its own original R, selected-R exit
   and ATR trail across all later sessions. Manual/other-EA exposure on the
   symbol and unresolved immediate market requests block new pairs.
   Simultaneous signals use reference-date order, then Asian/London/NY order.
 - **Taking profit ends new entries for that session** (except an explicitly
   enabled 15M reversal), including a profitable
-  2R partial exit or any profitable stop/manual exit. Profit means an exit deal
+  selected-R partial exit or any profitable stop/manual exit. Profit means an exit deal
   with positive `DEAL_PROFIT` before fees. Broker history recovers this lock
   after restart. Already-filled positions keep their own exit management.
   If the first trade closes without profit, its midpoint trigger also ends.
@@ -156,17 +156,26 @@ EA EX5 is needed at runtime. Git pull alone does not update the terminal folders
   the stop to entry, subject to broker restrictions and current executable
   price. Sell confirmation adds the completed candle's spread to its bid close.
   `InpBreakEvenR` adjusts this threshold; `0` disables early break-even.
-  At **2R**, measured using executable bid for buys
-  and ask for sells, the EA closes **50% of the original filled volume**.
-  It then moves the remaining stop to entry or better and trails it at
-  **2 × the latest completed M15 ATR(14)**. There is no fixed final take profit.
+  **EA 1.11:** `InpScaleOutRR` selects **1R, 2R or 3R** for closing
+  **50% of the original filled volume**, default **2R** (existing behavior).
+  Selecting **1R** waits for a completed M1 close at +1R (sell close includes
+  spread), like the half-at-break-even test. Selecting **2R/3R** uses live
+  executable bid for buys / ask for sells, not a candle close.
+  After the half-close the remaining stop is moved to entry or better.
+  Early break-even remains independently controlled by `InpBreakEvenR`
+  (default +1R, 0 disables early BE; it does not disable a 1R half-close).
+  **ATR trailing always starts at +2R**, independently of the half-close
+  selection, at **2 × the latest completed M15 ATR(14)**. At 1R half-close,
+  the stop stays at entry until +2R; at 3R half-close, trailing starts on the
+  full position at +2R and can stop it out before +3R is reached. There is no
+  additional half-close at +2R when 1R or 3R is selected. There is no fixed final take profit.
   Trailing is checked every tick, never loosens an existing stop, and cannot
   move beyond break-even toward a loss. Break-even is price-based and does
   not include commission or swap.
 - Broker history supplies original entry, initial SL and completed scale-out
   volume after restart, so moving the stop does not redefine R or repeat the
-  half-close. Once 2R is reached, the scale-out remains armed across retracements
-  and rejected requests. Live 2R markers are stored in account/magic/position-
+  half-close. Half-close and +2R trailing triggers are independently latched
+  across retracements, rejected requests and restarts. Live markers are stored in account/magic/position-
   scoped terminal global variables and removed after closure; tester runs use
   only in-memory markers and never read/write live markers. Partial execution
   is reconciled before requesting the remaining half. Midpoint triggers
@@ -322,7 +331,8 @@ risk-sized volumes may differ because their stop distances differ. Estimated
 combined margin and existing plus new directional exposure are checked.
 
 `InpATRPeriod`, `InpStopBufferPrice` and `InpTrailingATR` are optimizable inputs;
-the ATR timeframe is always M15 and the 2R/50% rule is fixed. `InpMagic`
+the ATR timeframe is always M15, trailing starts at 2R, and half-close R is
+selected with `InpScaleOutRR` (1R/2R/3R, default 2R). `InpMagic`
 identifies managed positions. `InpDeviationPoints` is in symbol points, not
 pips. `InpMaxSpreadPoints = 0` disables the optional entry spread filter.
 Sizing excludes commissions, swap and gaps; actual execution and stop fills
@@ -357,22 +367,25 @@ logged; stop/freeze constraints can change.
 
 ### EA verification in MetaTrader 5
 
-Compile both the EA and indicator after installing the shared header. For
+Compile the EA after installing both EA headers; no indicator is needed. For
 pure core assertions, copy `Market_Sessions_Core_Tests.mq5` and the header into
 `MQL5/Scripts`, compile and run the script; the Experts tab should report
 `PASS: all Market Sessions Core assertions.`
 
 Use **Every tick based on real ticks** in Strategy Tester where available:
 
-1. Compare EA signals against indicator arrows with identical session/timezone
-   inputs. Test buys, sells, wick-only breaks, equality, overnight ranges,
+1. Compare EA signals against its built-in arrows and selected timeframe.
+   Test buys, sells, wick-only breaks, equality, overnight ranges,
    non-M15-aligned opening times and the DST dates below. Verify London/NY still
    signal after their opening time even when the EA was started before Asian open.
 2. Check each entry's initial SL against the opposite opening-range boundary
    plus buffer, its own actual filled R, and that
-   no scale-out happens below 2R. At 2R verify exactly half the original volume
-   closes, the remaining stop reaches entry or better, and its subsequent
-   ATR trail never loosens. Test both directions and changing ATR.
+   no scale-out happens before the selected trigger. Test each 1R/2R/3R
+   selection: 1R must wait for an M1 close; 2R/3R use executable price.
+   Verify exactly half closes once, including partial fills and restart.
+   Verify BE at +1R, no ATR trail before +2R, and trailing starts at +2R
+   even when the 3R half-close has not happened. Check persistent triggers
+   after a restart/retracement, both directions, and changing ATR.
 3. Test risk and fixed-lot modes, coarse volume steps, insufficient equity,
    odd-step fixed lots, spread limits, insufficient margin, disabled trading
    and broker stop/freeze rejection. Rejections must be visible in the log.

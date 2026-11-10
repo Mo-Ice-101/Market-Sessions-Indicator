@@ -1,6 +1,6 @@
 #property strict
-#property version "1.10"
-#property description "Opening M15 / selectable M5-M15 breakout entries, 50% at 2R, ATR trail."
+#property version "1.11"
+#property description "Opening M15 / M5-M15 entries, selectable 1R/2R/3R half-close, ATR trail from 2R."
 
 #include <Trade/Trade.mqh>
 #include "Market_Sessions_Core.mqh"
@@ -26,7 +26,15 @@ input ulong  InpMagic = 26011001;
 input ulong  InpDeviationPoints = 20;
 input int    InpMaxSpreadPoints = 0; // 0 disables the entry spread filter
 
+enum ScaleOutRR
+{
+   SCALE_OUT_1R = 1, // 1R (completed M1 close)
+   SCALE_OUT_2R = 2, // 2R (executable price)
+   SCALE_OUT_3R = 3  // 3R (executable price)
+};
+
 input group "Stops and ATR Management (completed M15 candles)"
+input ScaleOutRR InpScaleOutRR = SCALE_OUT_2R; // Close 50% at selected R; ATR trailing always starts at 2R
 input double InpStopBufferPrice = 1.0; // Price units beyond opposite M15 boundary (gold: 1.000)
 input double InpBreakEvenR = 1.0; // Move stop to entry after M1 close at this R; 0 disables early BE
 input int    InpATRPeriod = 14;
@@ -145,6 +153,7 @@ int OnInit()
    if(!MathIsValidNumber(InpRiskPercent) || !MathIsValidNumber(InpFixedLots) ||
       !MathIsValidNumber(InpStopBufferPrice) || !MathIsValidNumber(InpTrailingATR) ||
       !MathIsValidNumber(InpBreakEvenR) || InpBreakEvenR < 0 ||
+      InpScaleOutRR < SCALE_OUT_1R || InpScaleOutRR > SCALE_OUT_3R ||
       !MathIsValidNumber(InpBrokerUTCOffset) ||
       InpSizing < SIZE_EQUITY_PERCENT || InpSizing > SIZE_FIXED_LOTS ||
       (InpSizing == SIZE_EQUITY_PERCENT && (InpRiskPercent <= 0 || InpRiskPercent > 100)) ||
@@ -216,11 +225,14 @@ int OnInit()
          ", DST rule ", (int)InpBrokerDSTRule,
          ". Each entry uses the full risk/lot input; combined risk can be twice the setting.",
          " RSI is display-only. Use a demo account first.");
-   Print("Market Sessions EA 1.10: built-in boxes; Asian=",
+   Print("Market Sessions EA 1.11: built-in boxes; Asian=",
          EnumToString(g_sessions[0].break_timeframe), " London=",
          EnumToString(g_sessions[1].break_timeframe), " NY=",
          EnumToString(g_sessions[2].break_timeframe),
          ". Box colors/arrows mark confirmations, not guaranteed fills.");
+   Print("Management: 50% close at ", (int)InpScaleOutRR,
+         "R; early BE at M1 close +", InpBreakEvenR,
+         "R (0 disables early BE); ATR trailing from +2R independently.");
    if(!InpEnableEA)
       Print("EA entries disabled: midpoint orders will be cancelled; existing trades remain managed.");
    return INIT_SUCCEEDED;
@@ -369,12 +381,18 @@ bool HasPendingEAOrder()
    return false;
 }
 
-bool ArmScaleOut(const ulong identifier, const bool reached)
+bool ArmScaleOut(const ulong identifier, const bool reached, const string trigger = "2R")
 {
    bool tester = (bool)MQLInfoInteger(MQL_TESTER);
+   uint hash = 2166136261;
+   string account = AccountInfoString(ACCOUNT_SERVER) + ":" +
+                    IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+   for(int i = 0; i < StringLen(account); i++)
+      hash = (hash ^ StringGetCharacter(account, i)) * 16777619;
+   string key = StringFormat("MSBEA_%u_%I64u_%I64u_%s", hash, InpMagic, identifier, trigger);
    int index = -1;
    for(int i = 0; i < ArraySize(g_triggers); i++)
-      if(g_triggers[i].identifier == identifier)
+      if(g_triggers[i].key == key)
       {
          index = i;
          break;
@@ -384,25 +402,19 @@ bool ArmScaleOut(const ulong identifier, const bool reached)
       index = ArraySize(g_triggers);
       if(ArrayResize(g_triggers, index + 1) != index + 1)
       {
-         Warn("Cannot allocate a position's 2R marker.");
+         Warn("Cannot allocate position trigger " + trigger + ".");
          return false;
       }
-      uint hash = 2166136261;
-      string account = AccountInfoString(ACCOUNT_SERVER) + ":" +
-                       IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
-      for(int i = 0; i < StringLen(account); i++)
-         hash = (hash ^ StringGetCharacter(account, i)) * 16777619;
-      g_triggers[index].key = StringFormat("MSBEA_%u_%I64u_%I64u_2R", hash, InpMagic, identifier);
+      g_triggers[index].key = key;
       g_triggers[index].identifier = identifier;
       g_triggers[index].armed = false;
    }
-   string key = g_triggers[index].key;
    if(!tester && !g_triggers[index].armed && GlobalVariableCheck(key))
    {
       double saved;
       if(!GlobalVariableGet(key, saved) || saved != 1.0)
       {
-         Warn("Cannot read the saved 2R trigger; scale-out suspended.");
+         Warn("Cannot read saved position trigger " + trigger + "; action suspended.");
          return false;
       }
       g_triggers[index].armed = true;
@@ -413,7 +425,7 @@ bool ArmScaleOut(const ulong identifier, const bool reached)
       {
          if(GlobalVariableSet(key, 1.0) == 0)
          {
-            Warn("Cannot persist the 2R trigger; scale-out will retry.");
+            Warn("Cannot persist position trigger " + trigger + "; action will retry.");
             return false;
          }
          GlobalVariablesFlush();
@@ -952,7 +964,7 @@ bool ClosePartial(const ulong ticket, const bool buy, const double volume,
    request.type = buy ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
    request.price = buy ? tick.bid : tick.ask;
    request.deviation = InpDeviationPoints;
-   request.comment = "MSB 2R half";
+   request.comment = "MSB " + IntegerToString((int)InpScaleOutRR) + "R half";
    long filling = SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
    if((filling & SYMBOL_FILLING_FOK) != 0)
       request.type_filling = ORDER_FILLING_FOK;
@@ -966,22 +978,22 @@ bool ClosePartial(const ulong ticket, const bool buy, const double volume,
    MqlTradeCheckResult check = {};
    if(!OrderCheck(request, check))
    {
-      Warn(StringFormat("2R partial-close check failed: %u %s", check.retcode, check.comment));
+      Warn(StringFormat("Partial-close check failed: %u %s", check.retcode, check.comment));
       return false;
    }
    bool sent = OrderSend(request, result);
    if(sent && result.retcode == TRADE_RETCODE_PLACED)
    {
-      Warn("2R close submitted but not yet filled; awaiting the broker order.");
+      Warn("Half-close submitted but not yet filled; awaiting the broker order.");
       return false;
    }
    if(!sent ||
       (result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_DONE_PARTIAL))
    {
-      Warn(StringFormat("2R partial close failed: %u %s", result.retcode, result.comment));
+      Warn(StringFormat("Partial close failed: %u %s", result.retcode, result.comment));
       return false;
    }
-   Print("2R scale-out accepted for position ", ticket, ": volume=", result.volume);
+   Print((int)InpScaleOutRR, "R scale-out accepted for position ", ticket, ": volume=", result.volume);
    return true;
 }
 
@@ -1024,9 +1036,34 @@ void ManagePositions(const MqlTick &tick)
       }
       double market = buy ? tick.bid : tick.ask;
       double profit_distance = buy ? market - entry : entry - market;
+      bool trail_armed = ArmScaleOut(identifier, profit_distance >= 2 * risk ||
+                                    (InpScaleOutRR >= SCALE_OUT_2R && scaled > step * 1e-6));
+      bool scale_complete = scaled >= target_volume - step * 1e-6;
+      double closed_gain = 0;
+      bool closed_gain_ready = false;
+      if(!scale_complete && (InpScaleOutRR == SCALE_OUT_1R || InpBreakEvenR > 0))
+      {
+         MqlRates completed[];
+         if(CopyRates(_Symbol, PERIOD_M1, 1, 1, completed) == 1 &&
+            completed[0].time + PeriodSeconds(PERIOD_M1) >
+            (datetime)PositionGetInteger(POSITION_TIME))
+         {
+            double close_price = completed[0].close +
+                                 (buy ? 0 : completed[0].spread * _Point);
+            closed_gain = buy ? close_price - entry : entry - close_price;
+            closed_gain_ready = true;
+         }
+         else
+            Warn("Completed post-entry M1 candle unavailable for BE/1R half-close; retrying.");
+      }
       if(scaled < target_volume - step * 1e-6)
       {
-         if(ArmScaleOut(identifier, scaled > step * 1e-6 || profit_distance >= 2 * risk))
+         bool reached = InpScaleOutRR == SCALE_OUT_1R ?
+                        closed_gain_ready && closed_gain >= risk :
+                        profit_distance >= (int)InpScaleOutRR * risk;
+         string trigger = InpScaleOutRR == SCALE_OUT_2R ? "2R" :
+                          "Half" + IntegerToString((int)InpScaleOutRR) + "R";
+         if(ArmScaleOut(identifier, scaled > step * 1e-6 || reached, trigger))
          {
             double remaining = FloorVolume(target_volume - scaled, step);
             if(remaining < minimum || current_volume - remaining < minimum)
@@ -1046,24 +1083,10 @@ void ManagePositions(const MqlTick &tick)
             tp = PositionGetDouble(POSITION_TP);
          }
       }
-      bool scale_complete = scaled >= target_volume - step * 1e-6;
-      if(!scale_complete)
+      scale_complete = scaled >= target_volume - step * 1e-6;
+      if(!scale_complete && !trail_armed)
       {
-         if(InpBreakEvenR == 0)
-            continue;
-         MqlRates completed[];
-         if(CopyRates(_Symbol, PERIOD_M1, 1, 1, completed) != 1)
-         {
-            Warn("Cannot read completed M1 candle for early break-even; retrying.");
-            continue;
-         }
-         if(completed[0].time + PeriodSeconds(PERIOD_M1) <=
-            (datetime)PositionGetInteger(POSITION_TIME))
-            continue;
-         double close_price = completed[0].close +
-                              (buy ? 0 : completed[0].spread * _Point);
-         double closed_gain = buy ? close_price - entry : entry - close_price;
-         if(closed_gain < InpBreakEvenR * risk)
+         if(InpBreakEvenR == 0 || !closed_gain_ready || closed_gain < InpBreakEvenR * risk)
             continue;
       }
       if(!TradingAllowed())
@@ -1072,7 +1095,7 @@ void ManagePositions(const MqlTick &tick)
       double breakeven = StopPrice(entry, tick_size, !buy);
       double stop = breakeven;
       double atr;
-      if(scale_complete && ReadATR(atr))
+      if(trail_armed && ReadATR(atr))
       {
          double trail = StopPrice(market + (buy ? -1 : 1) * InpTrailingATR * atr,
                                   tick_size, buy);
@@ -1112,7 +1135,7 @@ void ManagePositions(const MqlTick &tick)
       if(!MQLInfoInteger(MQL_TESTER) && GlobalVariableCheck(key) &&
          !GlobalVariableDel(key))
       {
-         Warn("Cannot remove the closed position's 2R marker; cleanup will retry.");
+         Warn("Cannot remove the closed position's management marker; cleanup will retry.");
          continue;
       }
       int last = ArraySize(g_triggers) - 1;

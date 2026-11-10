@@ -140,7 +140,7 @@ void DrawEAVisualStatus()
    int line = (int)MathCeil(14.0 * TerminalInfoInteger(TERMINAL_SCREEN_DPI) / 72.0) + 6;
    EAVisualLabel("RSI", "H1 RSI: " + values[0] + " | M15 RSI: " + values[1] +
                  " | M5 RSI: " + values[2], 20);
-   EAVisualLabel("Timezone", StringFormat("EA 1.10 | Broker standard UTC%+.2f | DST rule=%d",
+   EAVisualLabel("Timezone", StringFormat("EA 1.11 | Broker standard UTC%+.2f | DST rule=%d",
                  InpBrokerUTCOffset, (int)InpBrokerDSTRule), 20 + line);
    string status = "";
    for(int s = 0; s < 3; s++)
@@ -148,6 +148,8 @@ void DrawEAVisualStatus()
                 EnumToString(g_sessions[s].break_timeframe) +
                 (g_sessions[s].enabled ? "" : " (entries off)");
    EAVisualLabel("Timeframes", status, 20 + 2 * line);
+   EAVisualLabel("Management", StringFormat("50%% at %dR | BE: M1 close +%.2fR | ATR from +2R",
+                 (int)InpScaleOutRR, InpBreakEvenR), 20 + 3 * line);
 }
 
 void DrawEABox(const EASessionRange &range, const datetime end, const color shade,
