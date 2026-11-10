@@ -11,6 +11,10 @@ parser.add_argument("--lots", type=float, default=0.04)
 parser.add_argument("--stop-buffer-price", type=float, default=1.0,
                     help="Price units beyond the opposite M15 range boundary (default 1.000)")
 parser.add_argument("--verbose", action="store_true", help="Print completed trades")
+parser.add_argument("--min-box-height", type=float, default=0,
+                    help="Minimum opening M15 high-low distance, inclusive (price units)")
+parser.add_argument("--max-box-height", type=float,
+                    help="Maximum opening M15 high-low distance, exclusive (price units)")
 parser.add_argument("--half-at-breakeven", action="store_true",
                     help="Research only: close 50%% at the +1R M1-close break-even trigger; "
                          "start ATR trailing only after +2R is reached")
@@ -22,6 +26,12 @@ for session in ("asian", "london", "ny"):
     parser.add_argument(f"--{session}-entry-minutes", type=int, choices=(5, 15),
                         help="Override breakout timeframe for this session only")
 args = parser.parse_args()
+if not math.isfinite(args.min_box_height) or args.min_box_height < 0:
+    parser.error("--min-box-height must be nonnegative and finite")
+if args.max_box_height is not None and (
+    not math.isfinite(args.max_box_height) or args.max_box_height <= args.min_box_height
+):
+    parser.error("--max-box-height must be finite and greater than --min-box-height")
 if args.scale_out_r != 2 and (args.half_at_breakeven or any(
     os.environ.get(key) for key in ("HALF_AT_BE", "FIXRR", "SCALE_FRACTION")
 )):
@@ -119,7 +129,10 @@ while day <= d1:
         start = to_server(ou); rs = ceil15(start)
         if rs in m15:
             o, h, l, c = m15[rs]
-            if h > l:
+            height = round(h - l, 9)
+            if h > l and height >= args.min_box_height and (
+                args.max_box_height is None or height < args.max_box_height
+            ):
                 ranges.append(dict(name=name, start=start, rs=rs, end=rs + D.timedelta(minutes=15),
                                    next=to_server(nxt), hi=h, lo=l, mid=(h + l) / 2,
                                    dir=0, conf=None, first=None, second=None, done=False,
@@ -311,6 +324,8 @@ gp, gl = sum(x["pnl"] for x in wins), -sum(x["pnl"] for x in losses)
 print("Approximate M1 replay: no commissions, swaps, margin/stop-outs or broker execution restrictions.")
 print(f"Broker DST={DST} fixed lots={args.lots}  ranges={len(ranges)} signals={sum(1 for r in ranges if r['conf'])}")
 print(f"Stop buffer={BUFFER:.3f} price units")
+print(f"Box height filter: >= {args.min_box_height:g}, "
+      + (f"< {args.max_box_height:g}" if args.max_box_height is not None else "no maximum"))
 print("Exit mode:", "50% at +1R M1 close / BE; ATR trail armed at +2R"
       if args.half_at_breakeven else
       ("legacy HALF_AT_BE override" if os.environ.get("HALF_AT_BE") else

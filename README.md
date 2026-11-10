@@ -258,7 +258,57 @@ python tools/sim_ea.py path/to/XAUUSD_i_M1_202607220724_202610302254.csv --entry
 Clear research environment overrides (such as `SKIP`, `NOMID`, `REVERSAL`,
 `NY_SWEEP`, `HALF_AT_BE`, `BE_R`, `FIXRR` or `SCALE_FRACTION`) before reproducing.
 
-#### Half-close at break-even, trail at 2R (2026-11-10)
+#### Opening M15 box-height filter research (2026-11-10)
+
+`--min-box-height` (inclusive, default 0) and `--max-box-height` (exclusive,
+default no maximum) filter opening M15 high minus low in price units, not
+points or entry-to-stop risk. They apply before confirmation/trade simulation;
+session boundaries still consider all scheduled sessions. Neither flag changes
+the live EA. Invalid, nonfinite or reversed bounds are rejected.
+
+The same July 22-October 30 demo export, Asian M5 / London M15 / NY off,
+$1,000 start and fixed 0.04 lots was tested with a 3.000 stop buffer,
+BE at +1R and ATR trailing from +2R. Midpoints/reversals remain off.
+
+| Height filter | Trades | Net, half at 1R | Net, half at 2R | Net, half at 3R |
+| --- | ---: | ---: | ---: | ---: |
+| No filter | 145 | +$1,738.87 | +$2,189.87 | +$2,202.48 |
+| [0,5) | 47 | -$140.42 | -$128.90 | -$216.23 |
+| [5,10) | 78 | +$1,507.19 | +$1,872.71 | +$2,012.50 |
+| [10,15) | 15 | +$113.40 | +$133.96 | +$115.12 |
+| [15,20) | 4 | +$24.24 | +$1.18 | -$10.04 |
+| [20,30) | 0 | $0.00 | $0.00 | $0.00 |
+| 30+ | 1 | +$234.46 | +$310.92 | +$301.12 |
+| Below 10 | 125 | +$1,366.77 | +$1,743.81 | +$1,796.27 |
+| Below 15 | 140 | +$1,480.17 | +$1,877.77 | +$1,911.40 |
+| Below 20 / below 30 | 144 | +$1,504.41 | +$1,878.95 | +$1,901.36 |
+| At least 5 | 98 | +$1,879.29 | +$2,318.77 | +$2,418.70 |
+| At least 10 | 20 | +$372.10 | +$446.06 | +$406.21 |
+| At least 15 | 5 | +$258.70 | +$312.10 | +$291.08 |
+| At least 20 | 1 | +$234.46 | +$310.92 | +$301.12 |
+
+Below 5 is identical to [0,5). No trades occur in [20,30), so below 20 and
+below 30 are identical; at least 20 and at least 30 are identical.
+The best net result among these tested filters is at least 5 / half at 3R:
+98 trades, +$2,418.70, PF 1.99, win rate 38.8%, max equity drawdown 15.3%.
+The same filter at 2R gives PF 1.95, win rate 38.8%, drawdown 15.7%;
+at 1R PF 1.77, win rate 55.1%, drawdown 12.1%.
+The [5,10) band at 3R has PF 2.20, win rate 41.0%, drawdown 17.0%.
+
+These are shared filters across both sessions, not independently optimized
+session filters. Repeated selection on this already-used period is in-sample
+optimization; high PF on one or five trades is not reliable. A single 30+
+trade contributes materially to total profit. Validate on fresh history before
+choosing a live filter. All approximate OHLC/execution and omitted-cost
+limitations above remain; fixed lots mean different box heights imply different
+cash risk. No live defaults or EA filters were changed.
+
+```sh
+python tools/sim_ea.py path/to/export.csv --asian-entry-minutes 5 --london-entry-minutes 15 --stop-buffer-price 3 --min-box-height 5 --scale-out-r 3
+python tools/sim_ea.py path/to/export.csv --asian-entry-minutes 5 --london-entry-minutes 15 --stop-buffer-price 3 --min-box-height 5 --max-box-height 10 --half-at-breakeven
+```
+
+#### Half-close at break-even, trail at 2R: comparison details
 
 For the EA's 3R half-close variant, use `--scale-out-r 3` instead of
 `--half-at-breakeven`. Break-even remains at the +1R M1 close; ATR trailing
