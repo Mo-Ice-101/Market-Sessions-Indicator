@@ -15,6 +15,17 @@ confirmation, high/midpoint/low levels and hedging-account trade management.
 
 ## Expert Advisor
 
+`Market_Sessions_EA_Gold_Buffer3_2R.set` is the gold stop-grid research
+recommendation: 3.000 extra stop buffer, 2R half-close, BE at +1R,
+ATR(14) x2 trailing from +2R, Asian M5, London M15, NY/midpoints/reversals
+off, no box-height filter, fixed 0.04 lots. Load it in EA 1.11's
+**Inputs -> Load**, then verify every input before applying. It enables new
+entries and assumes broker UTC+2 standard / Europe DST; change that timezone
+to your actual broker policy if different. Save existing inputs first.
+The approximate in-sample gold replay gave +$2,189.87, PF 1.68 and 15.9%
+equity drawdown from $1,000. This is not a guaranteed optimal/live-safe preset,
+does not match PainX specifications, and does not change EA defaults.
+
 As of **EA 1.10**, boxes are compiled directly into `Market_Sessions_EA.ex5`.
 `Market_Sessions_EA_Visuals.mqh` is a compile-time implementation header, not a
 separately installed program. Drawing reads the EA's session ranges and selected

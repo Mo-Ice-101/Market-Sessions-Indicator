@@ -1,0 +1,46 @@
+; Market Sessions EA 1.11 - gold research preset, not PainX
+; Asian M5 / London M15 / NY off; no box-height filter
+; Jul 22-Oct 30 2026 approximate replay: net +2189.87, PF 1.68, equity DD 15.9%
+; Fixed 0.04 lots; broker UTC+2 winter / UTC+3 Europe DST - verify your broker
+; In-sample result, before commissions/swaps/execution restrictions; demo-test first
+InpEnableEA=true
+InpShowSessionBoxes=true
+InpBoxTransparency=85
+InpEnableM15Reversal=false
+InpDebugSignals=true
+InpSizing=1
+InpRiskPercent=0.5
+InpFixedLots=0.04
+InpMagic=26011001
+InpDeviationPoints=20
+InpMaxSpreadPoints=0
+InpScaleOutRR=2
+InpStopBufferPrice=3.0
+InpBreakEvenR=1.0
+InpATRPeriod=14
+InpTrailingATR=2.0
+InpBrokerUTCOffset=2.0
+InpBrokerDSTRule=1
+InpBrokerDSTMinutes=60
+InpTradeAsian=true
+InpAsianMidpoint=false
+InpAsianBreakEntryTF=5
+InpAsianOpenHour=1
+InpAsianOpenMin=0
+InpAsianCloseHour=2
+InpAsianCloseMin=0
+InpTradeLondon=true
+InpLondonMidpoint=false
+InpLondonBreakEntryTF=15
+InpLondonOpenHour=11
+InpLondonOpenMin=0
+InpLondonCloseHour=15
+InpLondonCloseMin=0
+InpTradeNY=false
+InpNYMidpoint=false
+InpNYBreakEntryTF=5
+InpNYOpenHour=13
+InpNYOpenMin=30
+InpNYCloseHour=21
+InpNYCloseMin=0
+InpDaysToMonitor=5
