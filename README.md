@@ -248,6 +248,47 @@ python tools/sim_ea.py path/to/XAUUSD_i_M1_202607220724_202610302254.csv --entry
 
 Clear research environment overrides (such as `SKIP`, `NOMID`, `REVERSAL`,
 `NY_SWEEP`, `HALF_AT_BE`, `BE_R`, `FIXRR` or `SCALE_FRACTION`) before reproducing.
+
+#### Half-close at break-even, trail at 2R (2026-11-10)
+
+Research-only `--half-at-breakeven` closes half the original volume at the
+executable completed M1 close that first reaches +1R and moves the remaining
+stop to entry. ATR trailing stays off until executable price first reaches
++2R, then remains armed through retracements. There is no second half-close at
+2R. R always uses the original filled entry and initial stop. This option
+does not change the EA. It requires `BE_R=1` (default) and rejects conflicting
+`HALF_AT_BE`, `FIXRR` or `SCALE_FRACTION` research overrides.
+
+On the same July 22-October 30 export, fixed 0.04 lots, $1,000 start,
+Asian M5, London M15, NY/midpoints/reversals off, and the same stop/DST settings:
+
+| Metric | Current: half at 2R | Research: half at BE, trail at 2R |
+| --- | ---: | ---: |
+| Trades | 145 | 145 |
+| Net P&L | +$1,761.69 | +$1,573.41 |
+| Final balance | $2,761.69 | $2,573.41 |
+| Winners / losers / flat | 45 / 68 / 32 | 77 / 68 / 0 |
+| Win rate | 31.0% | 53.1% |
+| Profit factor | 1.67 | 1.60 |
+| Maximum mark-to-market drawdown | 17.7% | 14.8% |
+| Asian net | +$267.62 | +$245.60 |
+| London net | +$1,494.07 | +$1,327.81 |
+| July net (partial month) | +$229.11 | +$303.75 |
+| August net | +$628.09 | +$606.15 |
+| September net | +$512.59 | +$355.89 |
+| October net | +$391.89 | +$307.61 |
+
+The higher win rate mostly converts previously flat positions into partial
+winners; losing trades remain 68. Earlier realization reduces the sample's
+drawdown but also net profit by $188.28. This is not new/out-of-sample evidence.
+The same OHLC, spread, execution and omitted-cost limitations above apply.
+The new half-close assumes execution at the triggering completed M1 close;
+live execution would be on a subsequent tick and could differ. No broker
+stop-modification or partial-close rejections are simulated.
+
+```sh
+python tools/sim_ea.py path/to/XAUUSD_i_M1_202607220724_202610302254.csv --asian-entry-minutes 5 --london-entry-minutes 15 --balance 1000 --lots 0.04 --half-at-breakeven
+```
 The input is an MT5 tab-separated M1 export with spread in points.
 Instrument assumptions are 3 digits, 100 oz/lot and 0.01 minimum/step.
 

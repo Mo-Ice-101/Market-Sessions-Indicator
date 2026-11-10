@@ -11,6 +11,9 @@ parser.add_argument("--lots", type=float, default=0.04)
 parser.add_argument("--stop-buffer-price", type=float, default=1.0,
                     help="Price units beyond the opposite M15 range boundary (default 1.000)")
 parser.add_argument("--verbose", action="store_true", help="Print completed trades")
+parser.add_argument("--half-at-breakeven", action="store_true",
+                    help="Research only: close 50%% at the +1R M1-close break-even trigger; "
+                         "start ATR trailing only after +2R is reached")
 parser.add_argument("--entry-minutes", type=int, choices=(5, 15), default=5,
                     help="Breakout confirmation candle duration; opening range stays M15")
 for session in ("asian", "london", "ny"):
@@ -29,6 +32,11 @@ START = args.balance
 os.environ["LOTS"] = str(args.lots)
 for key, value in {"SKIP": "NY", "NOMID": "Asian,London,NY", "BE_R": "1"}.items():
     os.environ.setdefault(key, value)
+if args.half_at_breakeven and (
+    os.environ["BE_R"] != "1" or any(os.environ.get(key) for key in
+                                    ("HALF_AT_BE", "FIXRR", "SCALE_FRACTION"))
+):
+    parser.error("--half-at-breakeven requires BE_R=1 and no HALF_AT_BE, FIXRR or SCALE_FRACTION override")
 POINT, CONTRACT, STEP, MINLOT = 0.001, 100.0, 0.01, 0.01
 BUFFER, DEV, ATRP, TRAIL = args.stop_buffer_price, 20 * POINT, 14, 2.0
 BASE = 2 * 3600
@@ -239,7 +247,7 @@ for t, o, h, l, c, sp in bars:
             r["second_tried"] = True; r["second"] = open_pos(r, "mid", True, min(o + sp, r["mid"]), t)
         elif not f["buy"] and h >= r["mid"] and r["mid"] > f["entry"]:
             r["second_tried"] = True; r["second"] = open_pos(r, "mid", False, max(o, r["mid"]), t)
-    # 2R scale-out, then break-even / ATR trail on bar close
+    # Research mode separates the +1R half-close from the +2R trailing trigger.
     a = atr.get(floor(t, 15)) or atr.get(max((k for k in atr if k <= t), default=None))
     for p in list(positions):
         tgt = p["entry"] + 2 * p["risk"] if p["buy"] else p["entry"] - 2 * p["risk"]
@@ -248,16 +256,21 @@ for t, o, h, l, c, sp in bars:
             gain = executable - p["entry"] if p["buy"] else p["entry"] - executable
             if gain >= float(os.environ["BE_R"]) * p["risk"]:
                 p["sl"] = max(p["sl"], p["entry"]) if p["buy"] else min(p["sl"], p["entry"])
-                if os.environ.get("HALF_AT_BE"):
+                if os.environ.get("HALF_AT_BE") or args.half_at_breakeven:
                     p["scaled"] = True
                     close(p, executable, round(p["vol"] / 2, 2), t, "BE-half")
-        if not os.environ.get("HALF_AT_BE") and not p["scaled"] and (h >= tgt if p["buy"] else l + sp <= tgt):
+        reached_2r = h >= tgt if p["buy"] else l + sp <= tgt
+        if args.half_at_breakeven and reached_2r:
+            p["trail_armed"] = True
+        if not (os.environ.get("HALF_AT_BE") or args.half_at_breakeven) and not p["scaled"] and reached_2r:
             p["scaled"] = True
             partial = round(p["vol"] * float(os.environ.get("SCALE_FRACTION", "0.5")), 2)
             if not os.environ.get("FIXRR"):
                 assert partial >= MINLOT and round(p["vol"] - partial, 2) >= MINLOT
             close(p, tgt, p["rem"] if os.environ.get("FIXRR") else partial, t, "2R")
-        if p["scaled"] and p in positions:
+        if p["scaled"] and p in positions and (
+            not args.half_at_breakeven or p.get("trail_armed", False)
+        ):
             mkt = c if p["buy"] else c + sp
             be = p["entry"]
             st = max(be, mkt - TRAIL * a) if p["buy"] else min(be, mkt + TRAIL * a)
@@ -288,6 +301,10 @@ gp, gl = sum(x["pnl"] for x in wins), -sum(x["pnl"] for x in losses)
 print("Approximate M1 replay: no commissions, swaps, margin/stop-outs or broker execution restrictions.")
 print(f"Broker DST={DST} fixed lots={args.lots}  ranges={len(ranges)} signals={sum(1 for r in ranges if r['conf'])}")
 print(f"Stop buffer={BUFFER:.3f} price units")
+print("Exit mode:", "50% at +1R M1 close / BE; ATR trail armed at +2R"
+      if args.half_at_breakeven else
+      ("legacy HALF_AT_BE override" if os.environ.get("HALF_AT_BE") else
+       "BE at +1R M1 close; 50% and ATR trail at +2R"))
 print(f"Entry confirmation=M{args.entry_minutes}; opening range=M15")
 print("Session entry overrides:", {
     name: getattr(args, name.lower() + "_entry_minutes") or args.entry_minutes
