@@ -258,6 +258,73 @@ python tools/sim_ea.py path/to/XAUUSD_i_M1_202607220724_202610302254.csv --entry
 Clear research environment overrides (such as `SKIP`, `NOMID`, `REVERSAL`,
 `NY_SWEEP`, `HALF_AT_BE`, `BE_R`, `FIXRR` or `SCALE_FRACTION`) before reproducing.
 
+#### PainX 999 R-factor comparison (2026-11-10)
+
+Replayed `PainX 999_M1_202609010810_202611101438.csv` from the repository's
+`main` branch, September 1 08:10 through November 10 14:38 (broker timestamps).
+The user confirmed UTC+2 all year (`--broker-dst none`). Session reference rules
+are unchanged: Asian M5, London M15, NY disabled, including weekend bars present
+in this synthetic feed. No height filter; opening M15 range, 3.000 stop buffer,
+BE at +1R M1 close and ATR(14) x2 trailing armed at +2R. Midpoints/reversals off.
+
+User-provided MT5 specification: two digits (point 0.01), linear USD CFD with
+contract size 1, minimum volume 0.10, volume step 0.01, stops level 191 points
+(1.91 price units), fixed margin display $70/lot. Used 0.20 lots, permitting
+a valid 0.10 half-close; gold's 0.04 lots is invalid here. Exported spread
+96 points becomes 0.96 price units, not 0.096. Tick size/value show rounded
+zero in the screenshot, so true tick rounding is not verified. Profit uses
+linear USD price difference x volume x contract size, not zero tick value.
+
+| Half-close R | Trades | Net | Final balance | PF | Win rate | Max equity DD | Positions half-closed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 141 | -$157.26 | $842.74 | 0.85 | 47.5% | 28.5% | 67 |
+| 2 | 141 | -$205.62 | $794.38 | 0.80 | 23.4% | 33.3% | 33 |
+| 3 | 141 | -$210.99 | $789.01 | 0.80 | 22.7% | 34.1% | 17 |
+| 4 | 141 | -$190.08 | $809.92 | 0.82 | 22.7% | 33.2% | 10 |
+| 5 | 141 | -$208.36 | $791.64 | 0.80 | 22.7% | 35.1% | 3 |
+| 6 | 141 | -$203.25 | $796.75 | 0.80 | 22.7% | 34.7% | 2 |
+| 7 | 141 | -$194.97 | $805.03 | 0.81 | 22.7% | 34.2% | 2 |
+| 8 | 141 | -$186.69 | $813.31 | 0.82 | 22.7% | 33.8% | 2 |
+| 9 | 141 | -$178.40 | $821.60 | 0.83 | 22.7% | 33.5% | 2 |
+| 10 | 141 | -$178.07 | $821.93 | 0.83 | 22.7% | 33.5% | 1 |
+
+| Half-close R | September net | October net | November 1-10 net |
+| --- | ---: | ---: | ---: |
+| 1 | -$101.48 | -$7.21 | -$48.57 |
+| 2 | -$123.12 | -$51.50 | -$31.00 |
+| 3 | -$88.07 | -$71.76 | -$51.16 |
+| 4 | -$68.21 | -$65.96 | -$55.90 |
+| 5 | -$80.83 | -$74.59 | -$52.94 |
+| 6 | -$84.01 | -$69.27 | -$49.98 |
+| 7 | -$84.01 | -$63.94 | -$47.02 |
+| 8 | -$84.01 | -$58.62 | -$44.06 |
+| 9 | -$84.01 | -$53.30 | -$41.10 |
+| 10 | -$84.01 | -$55.92 | -$38.14 |
+
+Every setting lost money before costs; 1R is least negative, not profitable.
+Trades: 70 Asian / 71 London, no stop-distance skips or forced end closures.
+At 1R, Asian net -$142.90 and London -$14.36. Higher R does not delay the
+independent +2R ATR trail: most positions exit before their high-R half-close.
+This tests half-close targets, not a delayed-trailing or slow-swing strategy.
+No live EA changes were made; the EA dropdown still supports only 1R/2R/3R.
+
+The replay checks configured minimum stop distance, but not actual broker
+acceptance, true tick rounding, freeze levels, slippage, commissions, swaps or
+margin/stop-outs. The specification shows -$5/lot swaps and Friday triple
+swap; these are excluded (rollover timestamps and broker charging behavior
+were not confirmed). M1 OHLC does not resolve spike/stop execution ordering,
+particularly important for synthetic jumps. Results are not a live forecast.
+Monthly attribution uses final exit date including partial P&L. Initial
+balance $1,000, no sizing compounding. The following reproduces 10R:
+
+```sh
+python tools/sim_ea.py "path/to/PainX 999_M1_202609010810_202611101438.csv" --broker-dst none --balance 1000 --lots 0.20 --point 0.01 --contract-size 1 --min-lot 0.10 --lot-step 0.01 --min-stop-distance 1.91 --stop-buffer-price 3 --asian-entry-minutes 5 --london-entry-minutes 15 --scale-out-r 10
+```
+
+Clear research environment overrides first; NY/midpoints remain off by default.
+For 1R replace `--scale-out-r 10` with `--half-at-breakeven`; other tested
+targets use `--scale-out-r` with an integer from 2 through 10.
+
 #### Opening M15 box-height filter research (2026-11-10)
 
 `--min-box-height` (inclusive, default 0) and `--max-box-height` (exclusive,

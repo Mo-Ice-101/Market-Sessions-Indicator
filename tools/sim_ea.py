@@ -1,13 +1,21 @@
 """Approximate opening-range EA simulation; not an MT5 tick or margin test."""
 import argparse
 import csv, math, os, datetime as D
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("csv", help="MT5 tab-separated M1 OHLC export with spread in points")
 parser.add_argument("--broker-dst", choices=("none", "europe"), default="europe")
 parser.add_argument("--balance", type=float, default=1000)
 parser.add_argument("--lots", type=float, default=0.04)
+parser.add_argument("--point", type=float, default=0.001,
+                    help="Symbol point size used to convert exported spread")
+parser.add_argument("--contract-size", type=float, default=100,
+                    help="USD P&L multiplier per price unit per lot (linear USD CFD)")
+parser.add_argument("--min-lot", type=float, default=0.01)
+parser.add_argument("--lot-step", type=float, default=0.01)
+parser.add_argument("--min-stop-distance", type=float, default=0,
+                    help="Broker minimum stop distance in price units; 0 skips this check")
 parser.add_argument("--stop-buffer-price", type=float, default=1.0,
                     help="Price units beyond the opposite M15 range boundary (default 1.000)")
 parser.add_argument("--verbose", action="store_true", help="Print completed trades")
@@ -18,7 +26,7 @@ parser.add_argument("--max-box-height", type=float,
 parser.add_argument("--half-at-breakeven", action="store_true",
                     help="Research only: close 50%% at the +1R M1-close break-even trigger; "
                          "start ATR trailing only after +2R is reached")
-parser.add_argument("--scale-out-r", type=int, choices=(2, 3), default=2,
+parser.add_argument("--scale-out-r", type=int, choices=range(2, 11), default=2,
                     help="Half-close at this R; ATR trailing still starts at +2R")
 parser.add_argument("--entry-minutes", type=int, choices=(5, 15), default=5,
                     help="Breakout confirmation candle duration; opening range stays M15")
@@ -35,13 +43,20 @@ if args.max_box_height is not None and (
 if args.scale_out_r != 2 and (args.half_at_breakeven or any(
     os.environ.get(key) for key in ("HALF_AT_BE", "FIXRR", "SCALE_FRACTION")
 )):
-    parser.error("--scale-out-r 3 cannot be combined with other scale-out overrides")
+    parser.error("--scale-out-r above 2 cannot be combined with other scale-out overrides")
 if not math.isfinite(args.stop_buffer_price) or args.stop_buffer_price < 0:
     parser.error("--stop-buffer-price must be nonnegative and finite")
 if not math.isfinite(args.balance) or args.balance <= 0:
     parser.error("--balance must be positive and finite")
-if not math.isfinite(args.lots) or args.lots < 0.02 or abs(args.lots / 0.02 - round(args.lots / 0.02)) > 1e-8:
-    parser.error("--lots must be a positive multiple of 0.02 for valid 50% halves")
+for name in ("point", "contract_size", "min_lot", "lot_step"):
+    value = getattr(args, name)
+    if not math.isfinite(value) or value <= 0:
+        parser.error("--" + name.replace("_", "-") + " must be positive and finite")
+if not math.isfinite(args.min_stop_distance) or args.min_stop_distance < 0:
+    parser.error("--min-stop-distance must be nonnegative and finite")
+if (not math.isfinite(args.lots) or args.lots / 2 < args.min_lot or
+    abs(args.lots / (2 * args.lot_step) - round(args.lots / (2 * args.lot_step))) > 1e-8):
+    parser.error("--lots must split into two valid 50% halves at --min-lot/--lot-step")
 DST = args.broker_dst
 RISK = 1.0  # Used only when overriding fixed sizing for research.
 START = args.balance
@@ -53,7 +68,7 @@ if args.half_at_breakeven and (
                                     ("HALF_AT_BE", "FIXRR", "SCALE_FRACTION"))
 ):
     parser.error("--half-at-breakeven requires BE_R=1 and no HALF_AT_BE, FIXRR or SCALE_FRACTION override")
-POINT, CONTRACT, STEP, MINLOT = 0.001, 100.0, 0.01, 0.01
+POINT, CONTRACT, STEP, MINLOT = args.point, args.contract_size, args.lot_step, args.min_lot
 BUFFER, DEV, ATRP, TRAIL = args.stop_buffer_price, 20 * POINT, 14, 2.0
 BASE = 2 * 3600
 SESS = [("Asian", 60), ("London", 660), ("NY", 810)]
@@ -192,7 +207,7 @@ def volume_for(entry, sl):
     v = math.floor(balance * RISK / 100 / loss / (2 * STEP) + 1e-9) * 2 * STEP
     return round(v, 2) if v / 2 >= MINLOT else 0.0
 
-def open_pos(r, kind, buy, price, t):
+def open_pos(r, kind, buy, price, t, spread=0):
     sl = (r["lo"] - BUFFER) if buy else (r["hi"] + BUFFER)
     if r.get("sweep_stop") is not None and kind == "high":
         sl = r["sweep_stop"]
@@ -202,6 +217,10 @@ def open_pos(r, kind, buy, price, t):
     vol = volume_for(price, sl)
     if vol <= 0:
         trades.append(dict(t=t, sess=r["name"], kind=kind, skipped="volume")); return None
+    stop_distance = price - spread - sl if buy else sl - price - spread
+    if stop_distance < args.min_stop_distance or stop_distance <= 0:
+        trades.append(dict(t=t, sess=r["name"], kind=kind, skipped="stop distance"))
+        return None
     p = dict(r=r, kind=kind, buy=buy, entry=price, sl=sl, risk=abs(price - sl), vol=vol, rem=vol,
              scaled=False, t=t, pnl=0.0)
     positions.append(p); return p
@@ -220,7 +239,8 @@ def close(p, price, vol, t, why):
                 p["r"]["be_exit"] = t + D.timedelta(minutes=1)
         trades.append(dict(t=p["t"], out=t, sess=p["r"]["name"], kind=p["kind"],
                            side="BUY" if p["buy"] else "SELL", entry=p["entry"], vol=p["vol"],
-                           pnl=p["pnl"], why=why, rs=p["r"]["start"]))
+                           pnl=p["pnl"], why=why, rs=p["r"]["start"],
+                           scaled=p["scaled"], initial_risk=p["risk"]))
 
 conf_at = defaultdict(list)
 for r in ranges:
@@ -233,7 +253,7 @@ for t, o, h, l, c, sp in bars:
         for r in conf_at.get(k, []):
             if not r["first"] and not r["profit"]:
                 buy = r["dir"] == 1
-                r["first"] = open_pos(r, "high", buy, o + sp if buy else o, t) or "skip"
+                r["first"] = open_pos(r, "high", buy, o + sp if buy else o, t, sp) or "skip"
         if os.environ.get("REVERSAL"):
             for r in ranges:
                 if not r.get("be_exit") or r.get("reversal_tried") or (r["profit"] and not os.environ.get("UNLOCK")):
@@ -251,7 +271,7 @@ for t, o, h, l, c, sp in bars:
                 if opposite_break:
                     r["reversal_tried"] = True
                     buy = r["dir"] == -1
-                    open_pos(r, "reversal", buy, o + sp if buy else o, t)
+                    open_pos(r, "reversal", buy, o + sp if buy else o, t, sp)
     # stops (conservative: adverse extreme first)
     for p in list(positions):
         if p["buy"] and l <= p["sl"]: close(p, min(o, p["sl"]), p["rem"], t, "SL")
@@ -263,9 +283,9 @@ for t, o, h, l, c, sp in bars:
         if not isinstance(f, dict) or f not in positions or r["second_tried"] or r["profit"] or t >= r["next"]:
             continue
         if f["buy"] and l + sp <= r["mid"] and r["mid"] < f["entry"]:
-            r["second_tried"] = True; r["second"] = open_pos(r, "mid", True, min(o + sp, r["mid"]), t)
+            r["second_tried"] = True; r["second"] = open_pos(r, "mid", True, min(o + sp, r["mid"]), t, sp)
         elif not f["buy"] and h >= r["mid"] and r["mid"] > f["entry"]:
-            r["second_tried"] = True; r["second"] = open_pos(r, "mid", False, max(o, r["mid"]), t)
+            r["second_tried"] = True; r["second"] = open_pos(r, "mid", False, max(o, r["mid"]), t, sp)
     # Research mode separates the +1R half-close from the +2R trailing trigger.
     a = atr.get(floor(t, 15)) or atr.get(max((k for k in atr if k <= t), default=None))
     for p in list(positions):
@@ -274,12 +294,13 @@ for t, o, h, l, c, sp in bars:
             executable = c if p["buy"] else c + sp
             gain = executable - p["entry"] if p["buy"] else p["entry"] - executable
             if gain >= float(os.environ["BE_R"]) * p["risk"]:
-                p["sl"] = max(p["sl"], p["entry"]) if p["buy"] else min(p["sl"], p["entry"])
+                if gain > args.min_stop_distance:
+                    p["sl"] = max(p["sl"], p["entry"]) if p["buy"] else min(p["sl"], p["entry"])
                 if os.environ.get("HALF_AT_BE") or args.half_at_breakeven:
                     p["scaled"] = True
                     close(p, executable, round(p["vol"] / 2, 2), t, "BE-half")
         reached_2r = h >= tgt if p["buy"] else l + sp <= tgt
-        independent_trail = args.half_at_breakeven or args.scale_out_r == 3
+        independent_trail = args.half_at_breakeven or args.scale_out_r > 2
         if independent_trail and reached_2r:
             p["trail_armed"] = True
         scale_target = p["entry"] + (1 if p["buy"] else -1) * args.scale_out_r * p["risk"]
@@ -291,18 +312,29 @@ for t, o, h, l, c, sp in bars:
                 assert partial >= MINLOT and round(p["vol"] - partial, 2) >= MINLOT
             close(p, scale_target, p["rem"] if os.environ.get("FIXRR") else partial,
                   t, f"{args.scale_out_r}R")
+            executable = c if p["buy"] else c + sp
+            gain = executable - p["entry"] if p["buy"] else p["entry"] - executable
+            if gain > args.min_stop_distance:
+                p["sl"] = max(p["sl"], p["entry"]) if p["buy"] else min(p["sl"], p["entry"])
         if p in positions and (
             p.get("trail_armed", False) if independent_trail else p["scaled"]
         ):
             mkt = c if p["buy"] else c + sp
             be = p["entry"]
             st = max(be, mkt - TRAIL * a) if p["buy"] else min(be, mkt + TRAIL * a)
+            distance = mkt - st if p["buy"] else st - mkt
+            be_distance = mkt - be if p["buy"] else be - mkt
+            if distance <= args.min_stop_distance:
+                if be_distance <= args.min_stop_distance:
+                    continue
+                st = be
             if (p["buy"] and st > p["sl"] and st < mkt) or (not p["buy"] and st < p["sl"] and st > mkt):
                 p["sl"] = st
     eq = balance + sum(((c - p["entry"]) if p["buy"] else (p["entry"] - c - sp)) * p["rem"] * CONTRACT
                        for p in positions)
     equity_curve.append(eq); prev_t = t
-for p in list(positions): close(p, bars[-1][4], p["rem"], bars[-1][0], "END")
+for p in list(positions):
+    close(p, bars[-1][4] + (0 if p["buy"] else bars[-1][5]), p["rem"], bars[-1][0], "END")
 
 # ---- report
 done = [x for x in trades if "pnl" in x]
@@ -321,8 +353,11 @@ wins = [x for x in done if x["pnl"] > 0]; losses = [x for x in done if x["pnl"] 
 peak, mdd = START, 0
 for e in equity_curve: peak = max(peak, e); mdd = max(mdd, (peak - e) / peak)
 gp, gl = sum(x["pnl"] for x in wins), -sum(x["pnl"] for x in losses)
-print("Approximate M1 replay: no commissions, swaps, margin/stop-outs or broker execution restrictions.")
+print("Approximate M1 replay: no commissions, swaps, margin/stop-outs or actual broker execution. "
+      "Only the configured minimum stop distance is checked.")
 print(f"Broker DST={DST} fixed lots={args.lots}  ranges={len(ranges)} signals={sum(1 for r in ranges if r['conf'])}")
+print(f"Point={POINT:g} contract={CONTRACT:g} min lot={MINLOT:g} lot step={STEP:g} "
+      f"minimum stop distance={args.min_stop_distance:g}")
 print(f"Stop buffer={BUFFER:.3f} price units")
 print(f"Box height filter: >= {args.min_box_height:g}, "
       + (f"< {args.max_box_height:g}" if args.max_box_height is not None else "no maximum"))
@@ -335,7 +370,10 @@ print("Session entry overrides:", {
     name: getattr(args, name.lower() + "_entry_minutes") or args.entry_minutes
     for name, _ in SESS
 })
-print(f"Trades {len(done)}  skipped(volume) {sum(1 for x in trades if x.get('skipped'))}")
+print(f"Trades {len(done)}  skipped {sum(1 for x in trades if x.get('skipped'))}")
+print("Skipped reasons:", dict(Counter(
+    x["skipped"] for x in trades if x.get("skipped")
+)))
 print(f"Net {balance - START:+.2f}  final {balance:.2f}  winrate {len(wins)/max(1,len(done))*100:.1f}%  "
       f"PF {gp/gl if gl else float('inf'):.2f}  maxDD {mdd*100:.1f}%")
 by = defaultdict(lambda: [0, 0, 0.0])

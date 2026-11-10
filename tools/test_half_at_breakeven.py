@@ -24,7 +24,8 @@ class HalfAtBreakevenTests(unittest.TestCase):
             closes.append((price, volume, reason))
 
         scope = dict(
-            args=SimpleNamespace(half_at_breakeven=research, scale_out_r=2), os=os,
+            args=SimpleNamespace(half_at_breakeven=research, scale_out_r=2,
+                                 min_stop_distance=0), os=os,
             atr={dt.datetime(2026, 1, 1): 1.}, t=dt.datetime(2026, 1, 1),
             floor=lambda stamp, minutes: stamp, positions=[p], close=close,
             TRAIL=2., MINLOT=.01,
@@ -96,6 +97,23 @@ class HalfAtBreakevenTests(unittest.TestCase):
                 self.assertEqual(p["rem"], .02)
                 self.manage(scope, price, price, price)
                 self.assertEqual(len(closes), 1)
+
+    def test_ten_r_does_not_delay_trailing_or_close_half_at_two_r(self):
+        p, closes, scope = self.setup_position(research=False)
+        scope["args"].scale_out_r = 10
+        self.manage(scope, 120, 120, 119)
+        self.assertEqual(p["sl"], 118)
+        self.assertEqual(p["rem"], .04)
+        self.assertEqual(closes, [])
+        self.manage(scope, 200, 200, 199)
+        self.assertEqual(closes, [(200, .02, "10R")])
+
+    def test_broker_stop_distance_blocks_early_be(self):
+        p, closes, scope = self.setup_position(research=False)
+        scope["args"].min_stop_distance = 11
+        self.manage(scope, 110, 110, 109)
+        self.assertEqual(p["sl"], 90)
+        self.assertEqual(closes, [])
 
 
 if __name__ == "__main__":
