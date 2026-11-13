@@ -4,46 +4,38 @@
 //| Asian/London use GMT+2 winter times; NY uses UTC winter times.    |
 //| London, New York and broker DST are calculated for each date.     |
 //+------------------------------------------------------------------+
-#property version   "1.01"
-#property description "Asian, London and NY session ranges in broker server time."
+#property version   "1.03"
+#property description "Opening M15 ranges with per-session M5/M15 breakouts and levels."
 #property indicator_chart_window
 #property indicator_plots 0
 
 #include <Canvas/Canvas.mqh>
-
-enum BrokerDSTRule
-{
-   BROKER_DST_NONE,      // No daylight saving
-   BROKER_DST_EUROPE,    // Last Sunday March/October, 01:00 UTC
-   BROKER_DST_US,        // US Eastern: second Sunday March/first Sunday November
-   BROKER_DST_AUSTRALIA, // First Sunday October/April, local 02:00/03:00
-   BROKER_DST_NZ        // Last Sunday September/first Sunday April, local 02:00/03:00
-};
+#include "Market_Sessions_Core.mqh"
 
 input group "Broker Timezone"
 input double        InpBrokerUTCOffset = 2.0; // Standard (winter) UTC offset in hours
-input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_NONE; // Fallback when automatic detection is disabled
+input BrokerDSTRule InpBrokerDSTRule = BROKER_DST_EUROPE; // Fallback when automatic detection is disabled
 input int           InpBrokerDSTMinutes = 60; // Broker clock advance during DST
-input bool          InpDetectBrokerOffset = true; // Automatically measure offset and learn broker DST
+input bool          InpDetectBrokerOffset = false; // Automatically measure offset and learn broker DST
 
 input group "Asian Session (GMT+2 winter reference)"
-input int   InpAsianOpenHour  = 0;
+input int   InpAsianOpenHour  = 1;
 input int   InpAsianOpenMin   = 0;
-input int   InpAsianCloseHour = 8;
+input int   InpAsianCloseHour = 2; // Session setting only; levels end at the next opening
 input int   InpAsianCloseMin  = 0;
 input int   InpAsianTransp   = 85; // Transparency: 0 = opaque, 100 = invisible fill
 
 input group "London Session (GMT+2 winter reference)"
-input int   InpLondonOpenHour  = 10;
+input int   InpLondonOpenHour  = 11;
 input int   InpLondonOpenMin   = 0;
-input int   InpLondonCloseHour = 14;
+input int   InpLondonCloseHour = 15; // Session setting only; levels end at the next opening
 input int   InpLondonCloseMin  = 0;
 input int   InpLondonTransp   = 85;
 
 input group "NY Session (UTC winter reference)"
-input int   InpNYOpenHour  = 14;
+input int   InpNYOpenHour  = 13;
 input int   InpNYOpenMin   = 30;
-input int   InpNYCloseHour = 21;
+input int   InpNYCloseHour = 21; // Session setting only; levels end at the next opening
 input int   InpNYCloseMin  = 0;
 input int   InpNYTransp   = 85;
 
@@ -52,12 +44,26 @@ input bool InpShowLabels     = true; // Show session names
 input bool InpShowTimeLabels = true; // Append opening time to session labels
 input int  InpBoxWidth       = 1;    // Border width: 1-5 pixels
 input int  InpDaysToShow     = 5;    // Calendar days including today: 1-30
+input string InpInstanceName = ""; // Optional unique name for EA-owned chart attachment
+
+input group "Break Entry Timeframes"
+input BreakEntryTimeframe InpAsianBreakEntryTF = BREAK_ENTRY_M5; // Asian Break Entry TF
+input BreakEntryTimeframe InpLondonBreakEntryTF = BREAK_ENTRY_M5; // London Break Entry TF
+input BreakEntryTimeframe InpNYBreakEntryTF = BREAK_ENTRY_M5; // NY Break Entry TF
+
+ENUM_TIMEFRAMES SessionBreakTimeframe(const int session)
+{
+   if(session == 0)
+      return (ENUM_TIMEFRAMES)InpAsianBreakEntryTF;
+   if(session == 1)
+      return (ENUM_TIMEFRAMES)InpLondonBreakEntryTF;
+   return (ENUM_TIMEFRAMES)InpNYBreakEntryTF;
+}
 
 struct SessionInfo
 {
    string name;
    int    open_minutes;
-   int    close_minutes;
    int    transparency;
 };
 
@@ -66,12 +72,14 @@ struct SessionBox
    int      session;
    datetime open_time;
    datetime close_time;
+   datetime next_session;
+   datetime range_close;
    double   high;
    double   low;
    color    final_color;
    bool     evaluated;
    bool     range_loaded;
-   datetime confirm_bar_time; // Open time of the M15 bar that confirmed the breakout
+   datetime confirm_bar_time; // Open time of the selected confirmation candle
 };
 
 SessionInfo g_sessions[3];
@@ -85,6 +93,7 @@ int         g_box_count = 0;
 datetime    g_day = 0;
 datetime    g_last_update = 0;
 datetime    g_last_bar = 0;
+datetime    g_last_m5 = 0;
 int         g_rsi_h1 = INVALID_HANDLE;
 int         g_rsi_m15 = INVALID_HANDLE;
 int         g_rsi_m5 = INVALID_HANDLE;
@@ -108,57 +117,6 @@ BrokerObservation g_observations[];
 //| Calendar rules use UTC instants, independent of the PC timezone.  |
 //| occurrence = 0 selects the last Sunday, otherwise the nth Sunday. |
 //+------------------------------------------------------------------+
-datetime TransitionSunday(const int year, const int month,
-                          const int occurrence, const int hour)
-{
-   MqlDateTime date = {};
-   date.year = year;
-   date.mon = (occurrence == 0 ? month + 1 : month);
-   date.day = 1;
-   if(date.mon == 13)
-   {
-      date.mon = 1;
-      date.year++;
-   }
-   datetime day = StructToTime(date);
-   if(occurrence == 0)
-      day -= 86400;
-   TimeToStruct(day, date);
-   int delta = (occurrence == 0 ? -date.day_of_week :
-                (7 - date.day_of_week) % 7 + (occurrence - 1) * 7);
-   return day + delta * 86400 + hour * 3600;
-}
-
-bool IsDST(const datetime utc, const BrokerDSTRule rule,
-           const int base_minutes, const int shift_minutes)
-{
-   if(rule == BROKER_DST_NONE)
-      return false;
-   MqlDateTime date;
-   TimeToStruct(utc, date);
-   datetime start, end;
-   if(rule == BROKER_DST_EUROPE)
-   {
-      start = TransitionSunday(date.year, 3, 0, 1);
-      end = TransitionSunday(date.year, 10, 0, 1);
-   }
-   else if(rule == BROKER_DST_US)
-   {
-      // Brokers using US dates commonly switch at the New York UTC instants.
-      start = TransitionSunday(date.year, 3, 2, 7);
-      end = TransitionSunday(date.year, 11, 1, 6);
-   }
-   else
-   {
-      start = TransitionSunday(date.year, rule == BROKER_DST_NZ ? 9 : 10,
-                               rule == BROKER_DST_NZ ? 0 : 1, 2) - base_minutes * 60;
-      end = TransitionSunday(date.year, 4, 1, 3) -
-            (base_minutes + shift_minutes) * 60;
-      return utc >= start || utc < end;
-   }
-   return utc >= start && utc < end;
-}
-
 int BrokerOffset(const datetime utc)
 {
    if(InpDetectBrokerOffset && !MQLInfoInteger(MQL_TESTER) && !g_broker_verified)
@@ -352,22 +310,9 @@ void DrawBrokerTimezone()
 datetime SessionServerTime(const datetime reference, const int session)
 {
    // NY uses UTC winter hours; Asian/London retain their GMT+2 reference.
-   datetime utc = reference - (session == 2 ? 0 : 2 * 3600);
-   datetime utc_after_gmt2 = utc;
-   bool ny_dst = false;
-   if(session == 2)
-   {
-      ny_dst = IsDST(utc, BROKER_DST_US, 0, 60);
-      if(ny_dst)
-         utc -= 3600;
-   }
-   else if(session == 1)
-   {
-      // Resolve local wall time: first occurrence at fall-back; normalize
-      // nonexistent spring-forward times into the following hour.
-      if(IsDST(utc - 3600, BROKER_DST_EUROPE, 0, 60))
-         utc -= 3600;
-   }
+   datetime utc_after_gmt2 = reference - (session == 2 ? 0 : 2 * 3600);
+   bool ny_dst = session == 2 && IsDST(utc_after_gmt2, BROKER_DST_US, 0, 60);
+   datetime utc = SessionUTC(reference, session);
    if(session == 2)
    {
       int broker_offset = BrokerOffset(utc);
@@ -401,18 +346,18 @@ bool ConfigureSession(const int index, const string name,
                       const int close_hour, const int close_minute,
                       const int transparency)
 {
-   if(open_hour < 0 || open_hour > 23 || close_hour < 0 || close_hour > 23 ||
-      open_minute < 0 || open_minute > 59 || close_minute < 0 || close_minute > 59 ||
-      transparency < 0 || transparency > 100 ||
-      (open_hour == close_hour && open_minute == close_minute))
+   if(open_hour < 0 || open_hour > 23 ||
+      open_minute < 0 || open_minute > 59 ||
+      close_hour < 0 || close_hour > 23 || close_minute < 0 || close_minute > 59 ||
+      (open_hour == close_hour && open_minute == close_minute) ||
+      transparency < 0 || transparency > 100)
    {
       Print("Invalid ", name, " settings: hours 0-23, minutes 0-59, ",
-            "transparency 0-100, and different opening/closing times required.");
+            "transparency 0-100 and different opening/closing times required.");
       return false;
    }
    g_sessions[index].name = name;
    g_sessions[index].open_minutes = open_hour * 60 + open_minute;
-   g_sessions[index].close_minutes = close_hour * 60 + close_minute;
    g_sessions[index].transparency = transparency;
    return true;
 }
@@ -420,6 +365,12 @@ bool ConfigureSession(const int index, const string name,
 int OnInit()
 {
    g_chart = ChartID();
+   if(!IndicatorSetString(INDICATOR_SHORTNAME,
+                         InpInstanceName == "" ? "Market Sessions Boxes" : InpInstanceName))
+   {
+      Print("Unable to set indicator name. Error: ", GetLastError());
+      return INIT_FAILED;
+   }
    if(!MathIsValidNumber(InpBrokerUTCOffset) ||
       InpBrokerUTCOffset < -14.0 || InpBrokerUTCOffset > 14.0 ||
       InpBrokerDSTMinutes < 1 || InpBrokerDSTMinutes > 120 ||
@@ -427,6 +378,13 @@ int OnInit()
    {
       Print("Broker UTC offset must be -14 to +14 hours, DST advance 1-120 minutes, ",
             "and a supported DST rule is required.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(!ValidBreakEntryTimeframe(InpAsianBreakEntryTF) ||
+      !ValidBreakEntryTimeframe(InpLondonBreakEntryTF) ||
+      !ValidBreakEntryTimeframe(InpNYBreakEntryTF))
+   {
+      Print("Break Entry TF must be M5 or M15 for each session.");
       return INIT_PARAMETERS_INCORRECT;
    }
    if(InpDaysToShow < 1 || InpDaysToShow > 30 || InpBoxWidth < 1 || InpBoxWidth > 5)
@@ -496,6 +454,7 @@ void OnDeinit(const int reason)
       ObjectsDeleteAll(g_chart, g_prefix + "Box_");
       ObjectsDeleteAll(g_chart, g_prefix + "Label_");
       ObjectsDeleteAll(g_chart, g_prefix + "ConfirmArrow_");
+      ObjectsDeleteAll(g_chart, g_prefix + "Level_");
       ObjectDelete(g_chart, g_prefix + "RSI_Label");
       ObjectDelete(g_chart, g_prefix + "Timezone_Label");
       ObjectDelete(g_chart, g_prefix + "Canvas");
@@ -519,11 +478,13 @@ int OnCalculate(const int rates_total, const int prev_calculated,
    if(rates_total == 0)
       return 0;
    datetime bar_time = time[ArrayGetAsSeries(time) ? 0 : rates_total - 1];
+   datetime m5 = iTime(_Symbol, PERIOD_M5, 0);
    datetime now = TimeCurrent();
-   if(prev_calculated == 0 || bar_time != g_last_bar ||
+   if(prev_calculated == 0 || bar_time != g_last_bar || m5 != g_last_m5 ||
       now < g_last_update || now - g_last_update >= 60)
    {
       g_last_bar = bar_time;
+      g_last_m5 = m5;
       UpdateSessions();
    }
    else
@@ -537,7 +498,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
 
 void OnTimer()
 {
-   // Also retries asynchronous M1/M15 history requests without waiting for a tick.
+   // Retry asynchronous M15/M5 history requests without waiting for a tick.
    UpdateSessions();
 }
 
@@ -549,82 +510,26 @@ void OnChartEvent(const int id, const long &lparam,
 }
 
 //+------------------------------------------------------------------+
-//| M1 bars make the range independent of the displayed timeframe.    |
-//| Include opens in [start, end), never the bar opening at the close. |
-//| CopyRates may return -1 while history loads; the timer retries.    |
-//+------------------------------------------------------------------+
-bool SessionRange(const datetime start, const datetime end,
-                  const datetime now, double &highest, double &lowest)
-{
-   if(start > now)
-      return false;
-   datetime stop = (now < end ? now : end - 1);
-   MqlRates rates[];
-   int count = CopyRates(_Symbol, PERIOD_M1, start, stop, rates);
-   if(count <= 0)
-      return false;
-   highest = rates[0].high;
-   lowest = rates[0].low;
-   for(int i = 1; i < count; i++)
-   {
-      highest = MathMax(highest, rates[i].high);
-      lowest = MathMin(lowest, rates[i].low);
-   }
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Monitor M15 candles after session close until breakout detected.  |
-//| Check each M15 close: if > high (green) or < low (red), lock color.|
-//| Use body close only; in-range closes do not trigger evaluation.   |
+//| Freeze the opening M15 range, then use selected candle closes.    |
 //+------------------------------------------------------------------+
 void ConfirmBreak(SessionBox &box, const datetime now)
 {
-   int period = PeriodSeconds(PERIOD_M15);
-   
-   // Already evaluated, no more checks needed
-   if(box.evaluated)
+   if(box.evaluated || !box.range_loaded || now < box.range_close)
       return;
-   
-   // Session hasn't closed yet, no M15 to check
-   if(now < box.close_time)
-      return;
-   
-   // Get all M15 bars from session close onwards
    MqlRates rates[];
-   int count = CopyRates(_Symbol, PERIOD_M15, box.close_time, now, rates);
-   
+   ENUM_TIMEFRAMES timeframe = SessionBreakTimeframe(box.session);
+   int count = CopyRates(_Symbol, timeframe, box.range_close, now, rates);
    if(count <= 0)
-      return;  // M15 data not available yet, retry next update
-   
-   // Check each M15 bar starting from the first one after/at session close
-   for(int i = 0; i < count; i++)
+      return;
+   datetime confirmation;
+   int direction = FindOpeningBreak(rates, box.range_close, box.next_session, now,
+                                    box.high, box.low, confirmation, timeframe);
+   if(direction != 0)
    {
-      // Skip bars that closed before session ended
-      if(rates[i].time + period <= box.close_time)
-         continue;
-      
-      // Only check completed M15 bars (not the current open bar)
-      datetime bar_close_time = rates[i].time + period;
-      if(bar_close_time > now)
-         continue;  // Bar hasn't closed yet
-      
-      // Check body close for breakout (strictly greater or strictly less)
-      if(rates[i].close > box.high)
-      {
-         box.final_color = clrGreen;
-         box.confirm_bar_time = rates[i].time;
-         box.evaluated = true;
-         return;
-      }
-      else if(rates[i].close < box.low)
-      {
-         box.final_color = clrRed;
-         box.confirm_bar_time = rates[i].time;
-         box.evaluated = true;
-         return;
-      }
-      // else: in-range close, keep checking subsequent candles
+      box.final_color = direction > 0 ? clrGreen : clrRed;
+      box.confirm_bar_time = confirmation;
+      box.close_time = confirmation + PeriodSeconds(timeframe);
+      box.evaluated = true;
    }
 }
 
@@ -653,6 +558,7 @@ void UpdateSessions()
       ObjectsDeleteAll(g_chart, g_prefix + "Box_");
       ObjectsDeleteAll(g_chart, g_prefix + "Label_");
       ObjectsDeleteAll(g_chart, g_prefix + "ConfirmArrow_");
+      ObjectsDeleteAll(g_chart, g_prefix + "Level_");
       g_day = today;
    }
 
@@ -668,25 +574,21 @@ void UpdateSessions()
       for(int s = 0; s < 3; s++)
       {
          datetime reference_start = midnight + g_sessions[s].open_minutes * 60;
-         datetime reference_end = midnight + g_sessions[s].close_minutes * 60;
-         if(reference_end < reference_start)
-            reference_end += 86400;
          datetime start = SessionServerTime(reference_start, s);
-         datetime end = SessionServerTime(reference_end, s);
-         if(s == 2)
-            Print("NY DEBUG: UpdateSessions at ", TimeToString(now, TIME_DATE | TIME_SECONDS),
-                  ", Open ref=", TimeToString(reference_start, TIME_DATE | TIME_SECONDS),
-                  ", Close ref=", TimeToString(reference_end, TIME_DATE | TIME_SECONDS),
-                  ", Calculated open=", TimeToString(start, TIME_DATE | TIME_SECONDS),
-                  ", Calculated close=", TimeToString(end, TIME_DATE | TIME_SECONDS),
-                  ", Opening label=", TimeToString(start, TIME_MINUTES));
+         int openings[3];
+         for(int j = 0; j < 3; j++)
+            openings[j] = g_sessions[j].open_minutes;
+         datetime next_utc = NextSessionUTC(midnight, SessionUTC(reference_start, s), openings);
+         datetime end = next_utc + BrokerOffset(next_utc) * 60;
          if(end <= oldest || start > now || end <= start)
             continue;
          string key = IntegerToString(s) + "_" + IntegerToString((long)start);
          SessionBox box;
          box.session = s;
          box.open_time = start;
-         box.close_time = end;
+         box.close_time = now < end ? now : end;
+         box.next_session = end;
+         box.range_close = OpeningRangeStart(start) + PeriodSeconds(PERIOD_M15);
          box.high = 0;
          box.low = 0;
          box.final_color = clrGray;
@@ -698,7 +600,7 @@ void UpdateSessions()
          for(int i = 0; i < previous_count; i++)
          {
             if(previous_boxes[i].session == s && previous_boxes[i].open_time == start &&
-               previous_boxes[i].close_time == end)
+               previous_boxes[i].next_session == end)
             {
                box = previous_boxes[i];
                break;
@@ -708,18 +610,9 @@ void UpdateSessions()
          // Only attempt to load M1 range if it hasn't been loaded yet
          if(!box.range_loaded)
          {
-            if(!SessionRange(start, end, now, box.high, box.low))
+            if(box.range_close >= end ||
+               !LoadOpeningRange(_Symbol, start, now, box.high, box.low))
             {
-               // If session is in the past and we still can't load M1 data, mark as attempted
-               // but keep the box if it's already been evaluated or is recent
-               if(end < now - 86400)
-               {
-                  // Very old session, if no data loaded, delete it
-                  ObjectDelete(g_chart, g_prefix + "Box_" + key);
-                  ObjectDelete(g_chart, g_prefix + "Label_" + key);
-                  continue;
-               }
-               // Recent session, keep it for next update
                g_boxes[g_box_count] = box;
                g_box_count++;
                continue;
@@ -727,11 +620,13 @@ void UpdateSessions()
             box.range_loaded = true;
          }
          
-         // Monitor for breakout on each M15 candle after session close
+         if(!box.evaluated)
+            box.close_time = now < end ? now : end;
          ConfirmBreak(box, now);
          g_boxes[g_box_count] = box;
          g_box_count++;
-         DrawObjects(key, s, start, end, box.high, box.low, box.final_color);
+         DrawObjects(key, s, start, box.close_time, box.high, box.low, box.final_color);
+         DrawLevels(key, box);
          DrawConfirmationArrow(box);
       }
    }
@@ -740,7 +635,7 @@ void UpdateSessions()
 }
 
 //+------------------------------------------------------------------+
-//| Mark the M15 candle whose close confirmed the breakout with a     |
+//| Mark the M5 candle whose close confirmed the breakout with a      |
 //| small orange arrow: up below the low for buys, down above the     |
 //| high for sells, with the tip touching the candle.                 |
 //+------------------------------------------------------------------+
@@ -748,13 +643,14 @@ void DrawConfirmationArrow(const SessionBox &box)
 {
    if(!box.evaluated || box.confirm_bar_time == 0)
       return;
-   string name = g_prefix + "ConfirmArrow_" + IntegerToString((long)box.confirm_bar_time);
+   string name = g_prefix + "ConfirmArrow_" + IntegerToString(box.session) + "_" +
+                 IntegerToString((long)box.open_time);
    if(ObjectFind(g_chart, name) >= 0)
       return;
    MqlRates bar[];
-   if(CopyRates(_Symbol, PERIOD_M15, box.confirm_bar_time, 1, bar) <= 0 ||
+   if(CopyRates(_Symbol, SessionBreakTimeframe(box.session), box.confirm_bar_time, 1, bar) <= 0 ||
       bar[0].time != box.confirm_bar_time)
-      return; // M15 history not ready; retried on the next update
+      return;
    bool buy = (box.final_color == clrGreen);
    ENUM_OBJECT type = (buy ? OBJ_ARROW_UP : OBJ_ARROW_DOWN);
    double price = (buy ? bar[0].low : bar[0].high);
@@ -769,6 +665,36 @@ void DrawConfirmationArrow(const SessionBox &box)
    ObjectSetInteger(g_chart, name, OBJPROP_BACK, false);
    ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
+}
+
+void DrawLevels(const string key, const SessionBox &box)
+{
+   double prices[3];
+   prices[0] = box.high;
+   prices[1] = (box.high + box.low) / 2;
+   prices[2] = box.low;
+   for(int i = 0; i < 3; i++)
+   {
+      string name = g_prefix + "Level_" + key + "_" + IntegerToString(i);
+      if(ObjectFind(g_chart, name) < 0)
+      {
+         if(!ObjectCreate(g_chart, name, OBJ_TREND, 0, box.open_time, prices[i],
+                         box.next_session, prices[i]))
+         {
+            Print("Unable to create opening-range level. Error: ", GetLastError());
+            continue;
+         }
+         ObjectSetInteger(g_chart, name, OBJPROP_RAY_LEFT, false);
+         ObjectSetInteger(g_chart, name, OBJPROP_RAY_RIGHT, false);
+         ObjectSetInteger(g_chart, name, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(g_chart, name, OBJPROP_HIDDEN, true);
+      }
+      ObjectSetInteger(g_chart, name, OBJPROP_COLOR, box.final_color);
+      ObjectSetInteger(g_chart, name, OBJPROP_WIDTH, InpBoxWidth);
+      ObjectSetInteger(g_chart, name, OBJPROP_STYLE, i == 1 ? STYLE_DOT : STYLE_SOLID);
+      ObjectMove(g_chart, name, 0, box.open_time, prices[i]);
+      ObjectMove(g_chart, name, 1, box.next_session, prices[i]);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -885,6 +811,8 @@ void RenderFills()
    g_canvas.Erase(0); // Fully transparent background
    for(int i = 0; i < g_box_count; i++)
    {
+      if(!g_boxes[i].range_loaded)
+         continue;
       int x1, y1, x2, y2;
       if(!ChartTimePriceToXY(g_chart, 0, g_boxes[i].open_time, g_boxes[i].high, x1, y1) ||
          !ChartTimePriceToXY(g_chart, 0, g_boxes[i].close_time, g_boxes[i].low, x2, y2))
